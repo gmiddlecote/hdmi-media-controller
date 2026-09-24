@@ -7,11 +7,16 @@ fullscreen on it while the control UI stays on the laptop display.
 
 ## Current status
 
-Initial implementation. The following is working today:
-
 - Tauri 2 project skeleton (Rust backend, static HTML/CSS/JS control UI).
-- Native Windows display enumeration via the Win32 `EnumDisplayDevices`
-  API (raw FFI, no extra crates) — displays are listed in the UI.
+- Native Windows display enumeration via Win32 `EnumDisplayDevices`.
+- Connector-type detection (HDMI, DisplayPort, DVI, VGA, ...) via
+  `QueryDisplayConfig`.
+- Resolution enumeration (current + all supported modes) via
+  `EnumDisplaySettingsEx`, and mode selection via `ChangeDisplaySettingsEx`
+  (test first, then apply and persist).
+- Display hotplug detection: a polling watcher emits a `displays-changed`
+  Tauri event when the connected set changes, and the UI re-enumerates
+  automatically.
 - Module layout for the features that will be built next.
 
 ## Architecture
@@ -21,7 +26,7 @@ Initial implementation. The following is working today:
 ├── ui/                         Static control UI (no npm/bundler needed)
 │   ├── index.html
 │   ├── styles.css
-│   └── app.js                  Calls `list_displays` over Tauri IPC
+│   └── app.js                  Tauri IPC + displays-changed event handling
 └── src-tauri/                  Rust backend
     ├── Cargo.toml
     ├── tauri.conf.json
@@ -29,11 +34,12 @@ Initial implementation. The following is working today:
     ├── build.rs
     └── src/
         ├── main.rs             Binary entry point
-        ├── lib.rs              Tauri builder + IPC commands
+        ├── lib.rs              Tauri builder + IPC commands + hotplug watcher
         ├── display/            Display management
-        │   ├── mod.rs          Public API (`list_displays`, `DisplayError`)
-        │   ├── model.rs        `DisplayInfo`, `StateFlags` (unit tested)
-        │   ├── platform_windows.rs   Win32 EnumDisplayDevices FFI
+        │   ├── mod.rs          Public API (list/modes/set, DisplayError)
+        │   ├── model.rs        DisplayInfo, DisplayMode, connector labels (unit tested)
+        │   ├── hotplug.rs      Change-detection helpers (unit tested)
+        │   ├── platform_windows.rs   Win32 GDI + display config implementation
         │   └── platform_other.rs     Non-Windows stub (returns an error)
         ├── media/              Media loading/playback (planned)
         ├── playlist/           Playlist handling (planned)
@@ -47,23 +53,43 @@ independently.
 
 ### How the IPC works
 
-`ui/app.js` invokes the Rust command `list_displays` (registered in
-`src-tauri/src/lib.rs`). The command returns `Vec<DisplayInfo>` serialized
-to camelCase JSON, which the UI renders as cards (friendly name, device
-name, stable id, primary/active/attached badges).
+`ui/app.js` talks to the Rust commands registered in `src-tauri/src/lib.rs`:
 
-### Windows display enumeration
+| Command              | Returns                       | Purpose                            |
+| -------------------- | ----------------------------- | ---------------------------------- |
+| `list_displays`      | `Vec<DisplayInfo>`            | Detected displays + connector type |
+| `get_display_modes`  | `DisplayModes`                | Current mode + supported modes     |
+| `set_display_mode`   | `()`                          | Apply a resolution to a display    |
 
-`src-tauri/src/display/platform_windows.rs` performs a two-level Win32
-enumeration:
+Structures are serialized to camelCase JSON. The backend also runs a
+hotplug watcher that emits the `displays-changed` event; the UI listens and
+re-enumerates.
 
-1. Display adapters (which own the `\\.\DISPLAYN` device names).
-2. The monitor(s) driven by each adapter, using
-   `EDD_GET_DEVICE_INTERFACE_NAME` to obtain a stable device interface id.
+### Windows display management
 
-Mirroring-driver devices and monitors that are not attached to the desktop
-are filtered out. Connection-type detection (HDMI vs DisplayPort, etc.)
-will be added later using `QueryDisplayConfig`.
+`src-tauri/src/display/platform_windows.rs` uses the lightweight
+`windows-sys` bindings (declarations only — no runtime, correct `DEVMODE`
+and `DISPLAYCONFIG_*` layouts without hand-maintaining them):
+
+1. **Display list**: two-level `EnumDisplayDevices` enumeration (adapters
+   own the `\\.\DISPLAYN` names; each adapter drives one or more monitors).
+   Mirroring drivers and devices not attached to the desktop are filtered
+   out. `EDD_GET_DEVICE_INTERFACE_NAME` yields a stable device id.
+2. **Connector type**: `QueryDisplayConfig` path targets report a
+   `DISPLAYCONFIG_VIDEO_OUTPUT_TECHNOLOGY`; the resulting labels are merged
+   into the display list by matching the monitor device-interface path.
+3. **Resolutions**: `EnumDisplaySettingsEx` walks all modes for a display;
+   `ENUM_CURRENT_SETTINGS` gives the mode in effect.
+4. **Mode selection**: `ChangeDisplaySettingsEx` is called with `CDS_TEST`
+   first, then applied with `CDS_UPDATEREGISTRY` (persisted across boots).
+
+If the display config can't be queried the app degrades gracefully: the
+display list still shows, just without a `connectionKind`.
+
+**Hotplug detection** is polling-based for now: every 2 seconds the backend
+compares the sorted set of connected monitor ids and emits
+`displays-changed` on any change. A future iteration can switch to
+`RegisterDeviceNotification` / `WM_DISPLAYCHANGE` for push-based events.
 
 ## Prerequisites
 
@@ -94,8 +120,8 @@ cargo tauri dev
 cargo tauri build --target x86_64-pc-windows-msvc
 ```
 
-On non-Windows hosts the app still builds and runs; the display list will
-show a "display enumeration is only supported on Windows" error.
+On non-Windows hosts the app still builds and runs; display operations
+return a "display management is only supported on Windows" error.
 
 ## Checks and tests
 
@@ -108,10 +134,13 @@ cargo test
 
 ## Roadmap
 
-- [ ] Detect HDMI connection type (`QueryDisplayConfig`).
-- [ ] Enumerate and select supported output resolutions (`EnumDisplaySettingsEx`).
+- [x] Detect HDMI connection type (`QueryDisplayConfig`).
+- [x] Enumerate and select supported output resolutions (`EnumDisplaySettingsEx`
+      + `ChangeDisplaySettingsEx`).
+- [x] Resolution/connection surfaced through IPC with UI selection controls.
+- [x] Display hotplug detection (re-enumerate on connect/disconnect via a
+      polling watcher that emits `displays-changed`).
+- [ ] Per-display fullscreen/borderless output windows (renderer).
 - [ ] Load local image and video files.
-- [ ] Fullscreen/borderless output window on the selected external display,
-      control UI stays on the primary display.
 - [ ] Playlists and scheduled playback.
 - [ ] Windows installer (NSIS/MSI via Tauri bundler).

@@ -3,8 +3,12 @@
 // Talks to the Rust backend over Tauri IPC. `window.__TAURI__` is provided
 // by the `app.withGlobalTauri` setting in tauri.conf.json, so no bundler or
 // npm packages are required.
+//
+// Events: listens for `displays-changed` (emitted by the backend hotplug
+// watcher) and re-enumerates the display list automatically.
 
 const { invoke } = window.__TAURI__.core;
+const { listen } = window.__TAURI__.event;
 
 const refreshBtn = document.getElementById("refresh-btn");
 const listEl = document.getElementById("display-list");
@@ -19,6 +23,90 @@ function el(tag, className, text) {
 
 function badge(label, on) {
   return el("span", `badge ${on ? "badge-on" : "badge-off"}`, label);
+}
+
+function formatMode(mode) {
+  return `${mode.width}x${mode.height} @ ${mode.refreshRate} Hz${
+    mode.bitDepth ? ` (${mode.bitDepth}-bit)` : ""
+  }`;
+}
+
+function buildResolutionSection(card, display) {
+  const section = el("div", "resolution");
+  section.append(el("div", "resolution-label", "Resolution"));
+
+  const currentLabel = el("div", "mode-current", "Loading\u2026");
+  const select = el("select", "mode-select");
+  select.disabled = true;
+  const applyBtn = el("button", "apply-btn", "Apply");
+  applyBtn.disabled = true;
+
+  const row = el("div", "resolution-row");
+  row.append(select, applyBtn);
+
+  const cardStatus = el("p", "card-status");
+  section.append(currentLabel, row, cardStatus);
+
+  let modes = [];
+
+  select.addEventListener("change", () => {
+    applyBtn.disabled = select.selectedIndex < 0;
+  });
+
+  applyBtn.addEventListener("click", async () => {
+    const mode = modes[select.selectedIndex];
+    if (!mode) return;
+    applyBtn.disabled = true;
+    cardStatus.textContent = `Applying ${formatMode(mode)}\u2026`;
+    try {
+      await invoke("set_display_mode", {
+        deviceName: display.deviceName,
+        width: mode.width,
+        height: mode.height,
+        refreshRate: mode.refreshRate,
+      });
+      cardStatus.textContent = `Applied ${formatMode(mode)}.`;
+      currentLabel.textContent = `Current: ${formatMode(mode)}`;
+    } catch (error) {
+      cardStatus.textContent = `Failed: ${String(error)}`;
+    } finally {
+      applyBtn.disabled = select.selectedIndex < 0;
+    }
+  });
+
+  invoke("get_display_modes", { deviceName: display.deviceName })
+    .then((result) => {
+      modes = result.modes;
+      currentLabel.textContent = `Current: ${formatMode(result.current)}`;
+
+      let currentMatch = null;
+      select.replaceChildren();
+      modes.forEach((mode, index) => {
+        const opt = el("option", "", formatMode(mode));
+        opt.value = String(index);
+        if (
+          mode.width === result.current.width &&
+          mode.height === result.current.height &&
+          mode.refreshRate === result.current.refreshRate
+        ) {
+          currentMatch = index;
+        }
+        select.append(opt);
+      });
+      if (currentMatch !== null) select.selectedIndex = currentMatch;
+      select.disabled = modes.length === 0;
+      applyBtn.disabled = modes.length === 0;
+      if (modes.length === 0) {
+        currentLabel.textContent = "Current: " + formatMode(result.current);
+        cardStatus.textContent = "No additional modes reported by the display.";
+      }
+    })
+    .catch((error) => {
+      currentLabel.textContent = "Resolutions unavailable";
+      cardStatus.textContent = String(error);
+    });
+
+  card.append(section);
 }
 
 function renderDisplays(displays) {
@@ -48,8 +136,12 @@ function renderDisplays(displays) {
       badge("active", display.isActive),
       badge("attached", display.isAttached)
     );
+    if (display.connectionKind) {
+      badges.append(badge(display.connectionKind, true));
+    }
 
     card.append(title, meta, badges);
+    buildResolutionSection(card, display);
     listEl.append(card);
   }
 
@@ -73,4 +165,5 @@ async function loadDisplays() {
 }
 
 refreshBtn.addEventListener("click", loadDisplays);
+listen("displays-changed", () => loadDisplays());
 loadDisplays();
