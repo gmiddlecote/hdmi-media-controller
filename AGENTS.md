@@ -79,4 +79,5 @@ All checks must be clean before committing.
   `src-tauri/Cargo.toml` (patch for fixes, minor for features), commit, push,
   then `git tag vX.Y.Z && git push origin vX.Y.Z` — do this automatically (no
   need to ask) so the Windows installer is rebuilt and published under a
-  version that matches the installer filenames and tag.
+  version that matches the installer filenames and tag. `tauri.conf.json`
+  must NOT carry a `version` field — Cargo.toml is the single version source.

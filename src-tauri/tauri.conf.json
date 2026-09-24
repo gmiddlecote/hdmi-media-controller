@@ -1,7 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "HDMI Media Controller",
-  "version": "0.1.0",
   "identifier": "com.hdmi-media-controller.app",
   "build": {
     "frontendDist": "../ui"
