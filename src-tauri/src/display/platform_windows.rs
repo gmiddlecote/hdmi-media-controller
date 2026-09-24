@@ -22,7 +22,7 @@ use windows_sys::Win32::Devices::Display::{
     DISPLAYCONFIG_MODE_INFO, DISPLAYCONFIG_PATH_INFO, DISPLAYCONFIG_TARGET_DEVICE_NAME,
     QDC_ALL_PATHS, QDC_ONLY_ACTIVE_PATHS,
 };
-use windows_sys::Win32::Foundation::{ERROR_INSUFFICIENT_BUFFER, ERROR_SUCCESS};
+use windows_sys::Win32::Foundation::{ERROR_INSUFFICIENT_BUFFER, ERROR_SUCCESS, POINTL};
 use windows_sys::Win32::Graphics::Gdi::{
     ChangeDisplaySettingsExW, EnumDisplayDevicesW, EnumDisplaySettingsExW, CDS_TEST,
     CDS_UPDATEREGISTRY, DEVMODEW, DISPLAY_DEVICEW, DISP_CHANGE_BADMODE, DISP_CHANGE_FAILED,
@@ -31,7 +31,7 @@ use windows_sys::Win32::Graphics::Gdi::{
 };
 
 use super::model::{
-    output_technology_label, DisplayInfo, DisplayMode, DisplayModes, StateFlags,
+    output_technology_label, DisplayBounds, DisplayInfo, DisplayMode, DisplayModes, StateFlags,
     DISPLAY_DEVICE_MIRRORING_DRIVER, EDD_GET_DEVICE_INTERFACE_NAME,
 };
 use super::DisplayError;
@@ -90,12 +90,14 @@ pub fn list_displays() -> Result<Vec<DisplayInfo>, DisplayError> {
             if flags.attached_to_desktop() {
                 let device_path = wide_to_string(&monitor.DeviceID);
                 let connection_kind = connections.get(&device_path).cloned();
+                let bounds = display_bounds(&adapter.DeviceName).unwrap_or_default();
                 displays.push(DisplayInfo::from_device(
                     device_path,
                     wide_to_string(&adapter.DeviceName),
                     wide_to_string(&monitor.DeviceString),
                     flags,
                     connection_kind,
+                    bounds,
                 ));
             }
 
@@ -213,6 +215,24 @@ fn enum_mode(device: &[u16], index: u32) -> Option<DisplayMode> {
         height: devmode.dmPelsHeight,
         refresh_rate: devmode.dmDisplayFrequency,
         bit_depth: devmode.dmBitsPerPel,
+    })
+}
+
+/// Returns the on-screen rectangle of a display (virtual desktop
+/// coordinates) via the position and pixel size of its current mode.
+fn display_bounds(device: &[u16]) -> Option<DisplayBounds> {
+    let mut devmode = zeroed_devmode();
+    let ok =
+        unsafe { EnumDisplaySettingsExW(device.as_ptr(), ENUM_CURRENT_SETTINGS, &mut devmode, 0) };
+    if ok == 0 {
+        return None;
+    }
+    let position: POINTL = unsafe { devmode.Anonymous1.Anonymous2.dmPosition };
+    Some(DisplayBounds {
+        x: position.x,
+        y: position.y,
+        width: devmode.dmPelsWidth,
+        height: devmode.dmPelsHeight,
     })
 }
 

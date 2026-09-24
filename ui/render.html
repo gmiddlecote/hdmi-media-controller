@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>HDMI Media Output</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: #000;
+        overflow: hidden;
+      }
+      #stage {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: #94a3b8;
+        font: 14px/1.6 system-ui, sans-serif;
+        text-align: center;
+        padding: 24px;
+        box-sizing: border-box;
+      }
+      #stage.media {
+        padding: 0;
+      }
+      img,
+      video {
+        display: block;
+        max-width: 100%;
+        max-height: 100%;
+        object-fit: contain;
+        background: #000;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="stage">No media assigned to this output.</div>
+    <script>
+      (function () {
+        const core = window.__TAURI__.core;
+        const event = window.__TAURI__.event;
+        const stage = document.getElementById("stage");
+        const label = window.__TAURI__.webview.getCurrentWebview().label;
+
+        function fail(message) {
+          stage.className = "";
+          stage.textContent = message;
+        }
+
+        core
+          .invoke("renderer_render_token", { label })
+          .then(function (payload) {
+            document.title = "HDMI Media Output \u2014 " + (payload.title || "");
+
+            if (payload.kind === "video") {
+              const video = document.createElement("video");
+              video.autoplay = true;
+              video.muted = true;
+              video.playsInline = true;
+              video.preload = "auto";
+              video.addEventListener("ended", function () {
+                event.emit("render-finished", {});
+              });
+              video.addEventListener("error", function () {
+                fail("Video could not be decoded: " + (payload.title || payload.mediaUrl));
+              });
+              video.src = payload.mediaUrl;
+              stage.className = "media";
+              stage.append(video);
+              video.play().catch(function () {});
+
+              // Browsers block autoplay with sound; also try on first click.
+              document.addEventListener("click", function play() {
+                video.play().catch(function () {});
+              });
+            } else {
+              const img = document.createElement("img");
+              img.alt = "";
+              img.addEventListener("error", function () {
+                fail("Image could not be decoded: " + (payload.title || payload.mediaUrl));
+              });
+              img.src = payload.mediaUrl;
+              stage.className = "media";
+              stage.append(img);
+            }
+          })
+          .catch(function (err) {
+            fail("No media assigned: " + String(err));
+          });
+
+        event.listen("output-control", function (evt) {
+          const video = stage.querySelector("video");
+          if (!video) return;
+          if (evt.payload === true) {
+            video.pause();
+          } else {
+            video.play().catch(function () {});
+          }
+        });
+      })();
+    </script>
+  </body>
+</html>

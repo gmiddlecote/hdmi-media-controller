@@ -35,6 +35,7 @@ mod tests {
             is_active: true,
             is_primary: false,
             connection_kind: None,
+            bounds: Default::default(),
         }
     }
 

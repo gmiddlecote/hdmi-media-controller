@@ -44,6 +44,19 @@ pub fn output_technology_label(value: i32) -> Option<&'static str> {
     Some(label)
 }
 
+/// Rectangle occupied by a display within the virtual desktop, in pixels.
+/// `x`/`y` are the top-left corner on the primary display's coordinate space;
+/// secondary monitors may report negative coordinates (windows physically
+/// placed to the upper-left of the primary).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DisplayBounds {
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+}
+
 /// A single display (monitor) detected on the system.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -63,6 +76,8 @@ pub struct DisplayInfo {
     /// Physical connector type when known (e.g. "HDMI", "DisplayPort",
     /// "Internal"); `None` when the display config could not be queried.
     pub connection_kind: Option<String>,
+    /// On-screen rectangle of the display (virtual desktop coordinates).
+    pub bounds: DisplayBounds,
 }
 
 impl DisplayInfo {
@@ -74,6 +89,7 @@ impl DisplayInfo {
         friendly_name: String,
         flags: StateFlags,
         connection_kind: Option<String>,
+        bounds: DisplayBounds,
     ) -> Self {
         Self {
             id,
@@ -83,6 +99,7 @@ impl DisplayInfo {
             is_active: flags.is_active(),
             is_primary: flags.is_primary(),
             connection_kind,
+            bounds,
         }
     }
 }
@@ -199,6 +216,12 @@ mod tests {
             is_active: true,
             is_primary: false,
             connection_kind: Some("HDMI".into()),
+            bounds: DisplayBounds {
+                x: 1920,
+                y: 0,
+                width: 1920,
+                height: 1080,
+            },
         };
 
         let value = serde_json::to_value(&info).expect("serializes");
@@ -213,6 +236,7 @@ mod tests {
                 "isActive": true,
                 "isPrimary": false,
                 "connectionKind": "HDMI",
+                "bounds": { "x": 1920, "y": 0, "width": 1920, "height": 1080 },
             })
         );
     }

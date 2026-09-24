@@ -22,8 +22,40 @@
         <p id="status" class="status">Loading&hellip;</p>
       </section>
 
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Playback</h2>
+        </div>
+
+        <div id="dropzone" class="dropzone" tabindex="0">
+          <p id="dropzone-hint">Drop image or video files here to build the playlist</p>
+        </div>
+        <div class="path-row">
+          <input id="path-input" type="text" placeholder="…or paste a file path and press Add" autocomplete="off" spellcheck="false" />
+          <button id="add-path-btn" type="button">Add</button>
+        </div>
+
+        <ol id="queue" class="queue" aria-live="polite"></ol>
+
+        <div class="playback-row">
+          <select id="output-display" class="mode-select" aria-label="Output display"></select>
+          <label class="dwell">
+            Dwell
+            <input id="dwell-input" type="number" min="1" step="1" value="5" />s
+          </label>
+          <button id="play-btn" type="button">Play</button>
+          <button id="pause-btn" type="button">Pause</button>
+          <button id="resume-btn" type="button">Resume</button>
+          <button id="prev-btn" type="button">&#8249;&#8249;</button>
+          <button id="next-btn" type="button">&#8250;&#8250;</button>
+          <button id="stop-btn" type="button">Stop</button>
+        </div>
+
+        <p id="playback-status" class="card-status">Idle.</p>
+      </section>
+
       <footer class="footer">
-        <span>Detected displays &middot; choose a resolution to apply &middot; auto-refreshes on display change</span>
+        <span>Displays &middot; resolutions &middot; connections &middot; playback &middot; drop files anywhere on the window</span>
       </footer>
     </main>
     <script src="app.js" type="module"></script>

@@ -21,18 +21,31 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self' 'unsafe-eval'; style-src 'self' 'unsafe-inline'"
+      "csp": "default-src 'self'; script-src 'self' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: media:; media-src 'self' data: blob: media:"
     }
   },
   "bundle": {
     "active": true,
     "targets": "all",
+    "publisher": "HDMI Media Controller",
+    "copyright": "Copyright (c) 2026",
+    "shortDescription": "Media playback for external HDMI displays",
+    "longDescription": "Enumerates Windows displays, reports their connector type, applies resolutions, and plays image/video playlists fullscreen on a chosen display.",
+    "category": "Entertainment",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "windows": {
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper"
+      },
+      "nsis": {
+        "installMode": "perMachine"
+      }
+    }
   }
 }

@@ -1,17 +1,303 @@
-//! Media playback.
+//! Media sources: local image and video files.
 //!
-//! Planned responsibilities:
-//! - Load local image and video files selected by the user.
-//! - Report media metadata (dimensions, codec, duration).
-//! - Hand decoded frames to [`crate::renderer`] for output on the selected
-//!   external display.
+//! A [`MediaItem`] describes one playable file. The module also owns the
+//! `media://` scheme registry backing the renderer: every item that is
+//! being shown (or queued) is registered under a numeric id, and the
+//! `serve` protocol handler streams the file bytes to the output window.
 //!
-//! Not implemented yet; this module carves out the boundary so playback
-//! can be developed independently of display management and scheduling.
+//! The registry doubles as an allow-list — the protocol refuses ids that
+//! were never registered, and refuse anything but registered files, so the
+//! renderer cannot be tricked into reading arbitrary paths from the disk.
+
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+
+use serde::Serialize;
 
 /// Kind of media a source can carry.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum MediaKind {
     Image,
     Video,
+}
+
+/// A single playable media file.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MediaItem {
+    /// Absolute path to the file on disk.
+    pub path: String,
+    /// File name without the directory component.
+    pub name: String,
+    /// Whether the file is an image or a video.
+    pub kind: MediaKind,
+}
+
+impl MediaItem {
+    /// Builds a [`MediaItem`] from a path, without touching the disk.
+    pub fn from_path(path: impl Into<String>) -> MediaItem {
+        let path = path.into();
+        let name = Path::new(&path)
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| path.clone());
+        let kind = kind_from_path(&path);
+        MediaItem { path, name, kind }
+    }
+}
+
+/// Guesses the media kind from a file extension.
+///
+/// Unsupported extensions are treated as images so that a non-media file
+/// still flows to the renderer and is shown with its natural `content-type`
+/// (e.g. text); the renderer is the last arbiter of what it can display.
+pub fn kind_from_path(path: &str) -> MediaKind {
+    let ext = Path::new(path)
+        .extension()
+        .map(|ext| ext.to_string_lossy().to_ascii_lowercase());
+    match ext.as_deref() {
+        Some("mp4" | "webm" | "mov" | "mkv" | "avi" | "ogv" | "m4v") => MediaKind::Video,
+        _ => MediaKind::Image,
+    }
+}
+
+/// Returns the MIME type used when serving a media id over `media://`.
+pub fn mime_for(kind: MediaKind, path: &str) -> String {
+    let ext = Path::new(path)
+        .extension()
+        .map(|ext| ext.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default();
+    match (kind, ext.as_str()) {
+        (MediaKind::Video, "webm") => "video/webm".into(),
+        (MediaKind::Video, "mov" | "m4v" | "mp4") => "video/mp4".into(),
+        (MediaKind::Video, "mkv") => "video/x-matroska".into(),
+        (MediaKind::Video, "avi") => "video/x-msvideo".into(),
+        (MediaKind::Video, "ogv") => "video/ogg".into(),
+        (MediaKind::Video, _) => "video/mp4".into(),
+        (MediaKind::Image, "jpg" | "jpeg") => "image/jpeg".into(),
+        (MediaKind::Image, "png") => "image/png".into(),
+        (MediaKind::Image, "gif") => "image/gif".into(),
+        (MediaKind::Image, "webp") => "image/webp".into(),
+        (MediaKind::Image, "bmp") => "image/bmp".into(),
+        (MediaKind::Image, "svg") => "image/svg+xml".into(),
+        (MediaKind::Image, "ico") => "image/x-icon".into(),
+        (MediaKind::Image, _) => "application/octet-stream".into(),
+    }
+}
+
+/// Registry of files currently allowed to be served to the renderer.
+///
+/// Managed as application state; hidden behind an opaque interface because
+/// the id space is the only contract the renderer window and the protocol
+/// handler share.
+#[derive(Default)]
+pub struct Registry(Mutex<RegistryInner>);
+
+#[derive(Default)]
+struct RegistryInner {
+    next_id: u64,
+    by_id: HashMap<u64, MediaItem>,
+}
+
+impl Registry {
+    /// Returns the `media://<id>` URL for a file, registering it if needed.
+    pub fn register(&self, item: MediaItem) -> String {
+        let mut inner = self.0.lock().unwrap();
+        let id = match inner
+            .by_id
+            .iter()
+            .find(|(_, entry)| entry.path == item.path)
+        {
+            Some((id, _)) => *id,
+            None => {
+                let id = inner.next_id;
+                inner.next_id += 1;
+                inner.by_id.insert(id, item);
+                id
+            }
+        };
+        format!("media://{id}")
+    }
+
+    /// Looks up a registered item by its numeric id.
+    pub fn get(&self, id: u64) -> Option<MediaItem> {
+        self.0.lock().unwrap().by_id.get(&id).cloned()
+    }
+
+    /// Forgets a file that is no longer displayed or queued.
+    pub fn release(&self, id: u64) {
+        self.0.lock().unwrap().by_id.remove(&id);
+    }
+}
+
+/// Parses the numeric id from a `media://<id>` URL's path.
+pub fn id_from_url(url: &str) -> Option<u64> {
+    let id = url.strip_prefix("media://")?;
+    id.parse().ok()
+}
+
+/// Absolute path of a file, or `None` when it exists but is a directory.
+pub fn canonical_path(path: &Path) -> Option<PathBuf> {
+    if !path.is_file() {
+        return None;
+    }
+    path.canonicalize().ok()
+}
+
+/// Serves registered media files over the `media://` custom URI scheme.
+///
+/// Registered ids are streamed with their natural `Content-Type`; video
+/// requests honor byte ranges so the renderer can seek. Anything that was
+/// never registered (arbitrary ids) is refused with 404 — the registry is
+/// the allow-list.
+pub fn serve(
+    ctx: tauri::UriSchemeContext<'_, tauri::Wry>,
+    request: tauri::http::Request<Vec<u8>>,
+) -> tauri::http::Response<Vec<u8>> {
+    use tauri::http::header::{ACCEPT_RANGES, CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE, RANGE};
+    use tauri::http::{Response, StatusCode};
+    use tauri::Manager;
+
+    let id = request.uri().path().trim_start_matches('/').parse::<u64>();
+    let Some(item) = id
+        .ok()
+        .and_then(|id| ctx.app_handle().state::<Registry>().get(id))
+    else {
+        return not_found();
+    };
+
+    let Ok(bytes) = std::fs::read(&item.path) else {
+        return not_found();
+    };
+    let total = bytes.len();
+    let mime = mime_for(item.kind, &item.path);
+
+    // Honor a single `bytes=start-end` or `bytes=start-` range (the webview
+    // uses these while scrubbing video); fall back to serving the whole file.
+    let requested = request
+        .headers()
+        .get(RANGE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(parse_range);
+
+    match requested {
+        Some((start, end)) if start < total => {
+            let end = end.min(total - 1);
+            let body = bytes[start..=end].to_vec();
+            Response::builder()
+                .status(StatusCode::PARTIAL_CONTENT)
+                .header(CONTENT_TYPE, mime)
+                .header(ACCEPT_RANGES, "bytes")
+                .header(CONTENT_LENGTH, body.len())
+                .header(CONTENT_RANGE, format!("bytes {start}-{end}/{total}"))
+                .body(body)
+                .unwrap_or_else(|_| not_found())
+        }
+        _ => Response::builder()
+            .status(StatusCode::OK)
+            .header(CONTENT_TYPE, mime)
+            .header(ACCEPT_RANGES, "bytes")
+            .header(CONTENT_LENGTH, total)
+            .body(bytes)
+            .unwrap_or_else(|_| not_found()),
+    }
+}
+
+/// Parses a `Range` header value into an inclusive byte window.
+fn parse_range(value: &str) -> Option<(usize, usize)> {
+    let spec = value.strip_prefix("bytes=")?;
+    let (start, end) = spec.split_once('-')?;
+    let start = start.parse::<usize>().ok()?;
+    let end = if end.is_empty() {
+        None
+    } else {
+        end.parse::<usize>().ok()
+    };
+    match end {
+        Some(end) => Some((start, end)),
+        None => Some((start, usize::MAX)),
+    }
+}
+
+fn not_found() -> tauri::http::Response<Vec<u8>> {
+    tauri::http::Response::builder()
+        .status(tauri::http::StatusCode::NOT_FOUND)
+        .body(Vec::new())
+        .unwrap_or_else(|_| tauri::http::Response::default())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn items() -> Vec<MediaItem> {
+        vec![
+            MediaItem::from_path("/media/logo.png"),
+            MediaItem::from_path("C:\\media\\advert.mp4"),
+            MediaItem::from_path("/media/shell.txt"),
+        ]
+    }
+
+    #[test]
+    fn guesses_kind_from_extension() {
+        assert_eq!(kind_from_path("/x/a.png"), MediaKind::Image);
+        assert_eq!(kind_from_path("/x/a.jpeg"), MediaKind::Image);
+        assert_eq!(kind_from_path("/x/a.mp4"), MediaKind::Video);
+        assert_eq!(kind_from_path("/x/a.MKV"), MediaKind::Video);
+        assert_eq!(kind_from_path("/x/a.webm"), MediaKind::Video);
+        assert_eq!(kind_from_path("/x/a.bin"), MediaKind::Image);
+    }
+
+    #[test]
+    fn maps_content_types() {
+        assert_eq!(mime_for(MediaKind::Image, "a.jpg"), "image/jpeg");
+        assert_eq!(mime_for(MediaKind::Image, "a.png"), "image/png");
+        assert_eq!(mime_for(MediaKind::Video, "a.mp4"), "video/mp4");
+        assert_eq!(mime_for(MediaKind::Video, "a.webm"), "video/webm");
+    }
+
+    #[test]
+    fn registers_and_resolves_ids() {
+        let registry = Registry::default();
+        let url = registry.register(items()[0].clone());
+        assert!(url.starts_with("media://"));
+        let id = id_from_url(&url).expect("id parses");
+        assert_eq!(registry.get(id), Some(items()[0].clone()));
+
+        let same = registry.register(items()[0].clone());
+        assert_eq!(same, url);
+    }
+
+    #[test]
+    fn refuses_unknown_ids_and_releases() {
+        let registry = Registry::default();
+        let url = registry.register(items()[1].clone());
+        let id = id_from_url(&url).unwrap();
+        registry.release(id);
+        assert_eq!(registry.get(id), None);
+        assert_eq!(registry.get(999), None);
+        assert_eq!(id_from_url("media://"), None);
+        assert_eq!(id_from_url("http://x"), None);
+    }
+
+    #[test]
+    fn builds_item_name_and_kind_from_path() {
+        let item = MediaItem::from_path("/somewhere/logo.png");
+        assert_eq!(item.name, "logo.png");
+        assert_eq!(item.kind, MediaKind::Image);
+        assert_eq!(item.path, "/somewhere/logo.png");
+    }
+
+    #[test]
+    fn parses_byte_ranges() {
+        assert_eq!(parse_range("bytes=0-1023"), Some((0, 1023)));
+        assert_eq!(parse_range("bytes=1024-"), Some((1024, usize::MAX)));
+        assert_eq!(parse_range("bytes=5-10"), Some((5, 10)));
+        assert_eq!(parse_range("bytes=0-"), Some((0, usize::MAX)));
+        assert_eq!(parse_range("bytes=-100"), None);
+        assert_eq!(parse_range("items=1-2"), None);
+        assert_eq!(parse_range("bytes=abc"), None);
+    }
 }

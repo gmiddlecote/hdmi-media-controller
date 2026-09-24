@@ -111,6 +111,7 @@ function buildResolutionSection(card, display) {
 
 function renderDisplays(displays) {
   listEl.replaceChildren();
+  syncOutputSelect(displays);
 
   if (displays.length === 0) {
     listEl.append(
@@ -167,3 +168,178 @@ async function loadDisplays() {
 refreshBtn.addEventListener("click", loadDisplays);
 listen("displays-changed", () => loadDisplays());
 loadDisplays();
+
+// ---------------------------------------------------------------------------
+// Playback: queue, output display, transport controls.
+// ---------------------------------------------------------------------------
+
+const dropzone = document.getElementById("dropzone");
+const dropzoneHint = document.getElementById("dropzone-hint");
+const pathInput = document.getElementById("path-input");
+const addPathBtn = document.getElementById("add-path-btn");
+const queueEl = document.getElementById("queue");
+const outputDisplay = document.getElementById("output-display");
+const dwellInput = document.getElementById("dwell-input");
+const playBtn = document.getElementById("play-btn");
+const pauseBtn = document.getElementById("pause-btn");
+const resumeBtn = document.getElementById("resume-btn");
+const prevBtn = document.getElementById("prev-btn");
+const nextBtn = document.getElementById("next-btn");
+const stopBtn = document.getElementById("stop-btn");
+const playbackStatus = document.getElementById("playback-status");
+
+let queuedPaths = [];
+
+function syncOutputSelect(displays) {
+  const previous = outputDisplay.value;
+  outputDisplay.replaceChildren();
+  if (displays.length === 0) {
+    const option = el("option", "", "No displays");
+    option.disabled = true;
+    outputDisplay.append(option);
+    outputDisplay.disabled = true;
+  } else {
+    displays.forEach((display) => {
+      const option = el(
+        "option",
+        "",
+        `${display.friendlyName} (${display.connectionKind || "unknown connector"})`
+      );
+      option.value = display.deviceName;
+      outputDisplay.append(option);
+    });
+    const keep = displays.some((d) => d.deviceName === previous)
+      ? previous
+      : displays[0].deviceName;
+    outputDisplay.value = keep;
+    outputDisplay.disabled = false;
+  }
+}
+
+function renderQueue() {
+  queueEl.replaceChildren();
+  queuedPaths.forEach((path, index) => {
+    const item = el("li", "queued-item");
+    const name = path.split(/[\\/]/).pop() || path;
+    const kind = /\.(mp4|webm|mov|mkv|avi|ogv|m4v)$/i.test(path) ? "video" : "image";
+    const remove = el("button", "queued-remove", "\u2715");
+    remove.title = "Remove from playlist";
+    remove.disabled = index === activeIndex;
+    remove.addEventListener("click", () => {
+      queuedPaths.splice(index, 1);
+      renderQueue();
+      pushPlaylist();
+    });
+    item.append(el("span", "queued-kind", kind), el("span", "queued-name", name), remove);
+    queueEl.append(item);
+  });
+  dropzoneHint.textContent =
+    queuedPaths.length === 0
+      ? "Drop image or video files here to build the playlist"
+      : `${queuedPaths.length} file(s) queued. Drop more to add them.`;
+}
+
+async function addPaths(paths) {
+  const accepted = paths.filter((path) => !queuedPaths.includes(path));
+  if (accepted.length === 0) return;
+  queuedPaths.push(...accepted);
+  renderQueue();
+  await pushPlaylist();
+  playbackStatus.textContent = `${accepted.length} file(s) added to the playlist.`;
+}
+
+async function pushPlaylist() {
+  try {
+    const accepted = await invoke("scheduler_set_playlist", { paths: queuedPaths });
+    if (accepted < queuedPaths.length) {
+      playbackStatus.textContent = `${queuedPaths.length - accepted} file(s) skipped (not found on disk).`;
+    }
+  } catch (error) {
+    playbackStatus.textContent = `Could not update playlist: ${String(error)}`;
+  }
+}
+
+let activeIndex = -1;
+
+function updateSnapshot(snapshot) {
+  const kind = snapshot.playing ? (snapshot.paused ? "Paused" : "Playing") : "Idle";
+  const where = snapshot.display ? `on ${snapshot.display}` : "";
+  const title = snapshot.title ? `\u201c${snapshot.title}\u201d` : "(empty playlist)";
+  const item = snapshot.total ? `item ${Math.min(snapshot.index + 1, snapshot.total)} of ${snapshot.total}` : "";
+  playbackStatus.textContent = `${kind}: ${title} ${where} ${item}.`.trim();
+  if (snapshot.lastError) {
+    playbackStatus.textContent += ` ${snapshot.lastError}`;
+  }
+
+  activeIndex = snapshot.playing ? snapshot.index : -1;
+  [...queueEl.children].forEach((child, i) => {
+    child.classList.toggle("active", i === activeIndex);
+    const remove = child.querySelector(".queued-remove");
+    if (remove) remove.disabled = i === activeIndex;
+  });
+
+  playBtn.disabled = snapshot.playing || !snapshot.total;
+  stopBtn.disabled = !snapshot.playing;
+  pauseBtn.disabled = !snapshot.playing || snapshot.paused;
+  resumeBtn.disabled = !snapshot.playing || !snapshot.paused;
+}
+
+(async function initPlayback() {
+  await pushPlaylist();
+
+  dropzone.addEventListener("dragover", (event) => {
+    event.preventDefault();
+    dropzone.classList.add("dragging");
+  });
+  dropzone.addEventListener("dragleave", () => dropzone.classList.remove("dragging"));
+  dropzone.addEventListener("drop", (event) => {
+    event.preventDefault();
+    dropzone.classList.remove("dragging");
+  });
+
+  // Native drop paths arrive as the tauri://drag-drop event on Windows.
+  listen("tauri://drag-drop", (event) => {
+    const paths = event.payload && event.payload.paths;
+    if (Array.isArray(paths)) addPaths(paths);
+  });
+  // Block the webview from navigating when files hit empty page space.
+  window.addEventListener("dragover", (event) => event.preventDefault());
+  window.addEventListener("drop", (event) => event.preventDefault());
+
+  addPathBtn.addEventListener("click", () => {
+    const path = pathInput.value.trim();
+    if (!path) return;
+    addPaths([path]);
+    pathInput.value = "";
+  });
+  pathInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") addPathBtn.click();
+  });
+
+  playBtn.addEventListener("click", async () => {
+    const device = outputDisplay.value;
+    if (!device || queuedPaths.length === 0) return;
+    try {
+      await invoke("scheduler_set_dwell", { millis: Number(dwellInput.value || 5) * 1000 });
+      await invoke("scheduler_play", { deviceName: device });
+    } catch (error) {
+      playbackStatus.textContent = `Could not start playback: ${String(error)}`;
+    }
+  });
+
+  pauseBtn.addEventListener("click", () => invoke("scheduler_pause").catch(() => {}));
+  resumeBtn.addEventListener("click", () => invoke("scheduler_resume").catch(() => {}));
+  prevBtn.addEventListener("click", () => invoke("scheduler_prev").catch(() => {}));
+  nextBtn.addEventListener("click", () => invoke("scheduler_next").catch(() => {}));
+  stopBtn.addEventListener("click", () => invoke("scheduler_stop").catch(() => {}));
+
+  listen("scheduler-state", (event) => {
+    if (event.payload) updateSnapshot(event.payload);
+  });
+  try {
+    const snapshot = await invoke("scheduler_status");
+    updateSnapshot(snapshot);
+  } catch (error) {
+    playbackStatus.textContent = `Could not read playback state: ${String(error)}`;
+  }
+})();
