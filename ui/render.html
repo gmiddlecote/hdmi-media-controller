@@ -34,6 +34,27 @@
         max-height: 100%;
         object-fit: contain;
         background: #000;
+        animation: media-fade 0.5s ease both;
+      }
+      @keyframes media-fade {
+        from {
+          opacity: 0;
+        }
+        to {
+          opacity: 1;
+        }
+      }
+      .overlay {
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        padding: 12px 28px;
+        background: rgba(0, 0, 0, 0.55);
+        color: #fff;
+        font: 500 17px/1.4 system-ui, sans-serif;
+        text-align: center;
+        animation: media-fade 0.3s ease both;
       }
     </style>
   </head>
@@ -51,10 +72,25 @@
           stage.textContent = message;
         }
 
+        function setOverlay(text) {
+          let el = stage.querySelector(".overlay");
+          if (!text) {
+            if (el) el.remove();
+            return;
+          }
+          if (!el) {
+            el = document.createElement("div");
+            el.className = "overlay";
+            stage.append(el);
+          }
+          el.textContent = String(text);
+        }
+
         core
           .invoke("renderer_render_token", { label })
           .then(function (payload) {
             document.title = "HDMI Media Output \u2014 " + (payload.title || "");
+            setOverlay(payload.overlay || "");
 
             if (payload.kind === "video") {
               const video = document.createElement("video");
@@ -64,6 +100,13 @@
               video.preload = "auto";
               video.addEventListener("ended", function () {
                 event.emit("render-finished", {});
+              });
+              video.addEventListener("timeupdate", function () {
+                if (!video.duration || video.duration === Infinity) return;
+                event.emit("media-progress", {
+                  current: video.currentTime,
+                  duration: video.duration,
+                });
               });
               video.addEventListener("error", function () {
                 fail("Video could not be decoded: " + (payload.title || payload.mediaUrl));
@@ -91,6 +134,10 @@
           .catch(function (err) {
             fail("No media assigned: " + String(err));
           });
+
+        event.listen("overlay-text", function (evt) {
+          setOverlay(evt.payload);
+        });
 
         event.listen("output-control", function (evt) {
           const video = stage.querySelector("video");

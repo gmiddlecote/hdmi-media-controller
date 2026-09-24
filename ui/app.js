@@ -369,7 +369,183 @@ function updateSnapshot(snapshot) {
   stopBtn.disabled = !snapshot.playing;
   pauseBtn.disabled = !snapshot.playing || snapshot.paused;
   resumeBtn.disabled = !snapshot.playing || !snapshot.paused;
+
+  updateNowPlaying(snapshot);
 }
+
+// ---------------------------------------------------------------------------
+// Now playing: current item thumbnail, dwell countdown / video progress.
+// ---------------------------------------------------------------------------
+
+const nowPlaying = document.getElementById("now-playing");
+const npThumb = document.getElementById("np-thumb");
+const npTitle = document.getElementById("np-title");
+const npFill = document.getElementById("np-fill");
+const npTime = document.getElementById("np-time");
+
+let nowPlayingPath = null;
+
+function fmtTime(seconds) {
+  if (!isFinite(seconds) || seconds < 0) return "\u2013";
+  const m = Math.floor(seconds / 60);
+  const s = Math.floor(seconds % 60)
+    .toString()
+    .padStart(2, "0");
+  return `${m}:${s}`;
+}
+
+function updateNowPlaying(snapshot) {
+  if (!snapshot.playing || !snapshot.path) {
+    nowPlaying.classList.add("hidden");
+    nowPlayingPath = null;
+    npThumb.replaceChildren();
+    return;
+  }
+  nowPlaying.classList.remove("hidden");
+  npTitle.textContent = snapshot.title || snapshot.path;
+
+  if (snapshot.path !== nowPlayingPath) {
+    nowPlayingPath = snapshot.path;
+    npThumb.replaceChildren();
+    invoke("media_register", { path: snapshot.path })
+      .then((url) => {
+        if (nowPlayingPath !== snapshot.path) return;
+        const thumb =
+          mediaKind(snapshot.path) === "video"
+            ? Object.assign(document.createElement("video"), {
+                muted: true,
+                playsInline: true,
+                preload: "metadata",
+              })
+            : document.createElement("img");
+        thumb.alt = "";
+        thumb.addEventListener("error", () => thumb.remove());
+        thumb.src = url;
+        npThumb.replaceChildren(thumb);
+      })
+      .catch(() => {});
+  }
+
+  if (snapshot.progress && snapshot.progress.duration > 0) {
+    const { current, duration } = snapshot.progress;
+    npFill.style.width = `${Math.min(100, (current / duration) * 100)}%`;
+    npTime.textContent = `${fmtTime(current)} / ${fmtTime(duration)}`;
+  } else if (snapshot.dwellMs > 0) {
+    npFill.style.width = `${Math.min(100, (snapshot.elapsedMs / snapshot.dwellMs) * 100)}%`;
+    const left = Math.max(0, snapshot.dwellMs - snapshot.elapsedMs);
+    npTime.textContent = `${(left / 1000).toFixed(1)}s left \u00b7 dwell ${(snapshot.dwellMs / 1000).toFixed(1)}s`;
+  } else {
+    npFill.style.width = "0%";
+    npTime.textContent = "";
+  }
+}
+
+// ---------------------------------------------------------------------------
+// File browser.
+// ---------------------------------------------------------------------------
+
+const browseInput = document.getElementById("browse-input");
+const browseGoBtn = document.getElementById("browse-go-btn");
+const browseUpBtn = document.getElementById("browse-up-btn");
+const browseStatus = document.getElementById("browser-status");
+const browserEl = document.getElementById("browser");
+const homePath = navigator.userAgent.includes("Windows") ? "C:\\" : "/";
+const browseStack = [];
+
+async function loadBrowser(index) {
+  const path = browseStack[index];
+  try {
+    const entries = await invoke("list_directory", { directory: path });
+    browseStatus.textContent = path;
+    browseUpBtn.disabled = index === 0;
+    renderBrowser(entries);
+  } catch (error) {
+    browseStatus.textContent = `Could not read ${path}: ${String(error)}`;
+  }
+}
+
+function renderBrowser(entries) {
+  browserEl.replaceChildren();
+  if (entries.length === 0) {
+    browserEl.append(
+      el("div", "card-status", "This folder has no sub-folders or media files.")
+    );
+    return;
+  }
+  for (const entry of entries) {
+    const row = el("div", `browse-row${entry.kind === "other" ? " other" : ""}`);
+    const kindTag = el(
+      "span",
+      `browse-kind${entry.kind === "image" || entry.kind === "video" ? " media" : ""}`,
+      entry.kind.toUpperCase()
+    );
+    const name = el("button", "browse-name", entry.name);
+    name.title = entry.path;
+    row.append(kindTag);
+
+    const openFolder = () => {
+      browseStack.push(entry.path);
+      loadBrowser(browseStack.length - 1);
+    };
+    const queueFromBrowser = () => {
+      addPaths([entry.path]);
+      playbackStatus.textContent = `${entry.name} queued from browser.`;
+    };
+
+    if (entry.kind === "dir") {
+      name.addEventListener("click", openFolder);
+      const open = el("button", "browse-action", "Open");
+      open.addEventListener("click", openFolder);
+      row.append(name, open);
+    } else if (entry.kind === "image" || entry.kind === "video") {
+      name.addEventListener("click", queueFromBrowser);
+      const add = el("button", "browse-action", "Add");
+      add.addEventListener("click", queueFromBrowser);
+      row.append(name, add);
+    } else {
+      row.append(name);
+    }
+    browserEl.append(row);
+  }
+}
+
+browseGoBtn.addEventListener("click", () => {
+  const path = browseInput.value.trim();
+  if (!path) return;
+  browseStack.length = 0;
+  browseStack.push(path);
+  loadBrowser(0);
+});
+browseInput.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") browseGoBtn.click();
+});
+browseUpBtn.addEventListener("click", () => {
+  if (browseStack.length <= 1) return;
+  browseStack.pop();
+  loadBrowser(browseStack.length - 1);
+});
+browseStack.push(homePath);
+browseInput.value = homePath;
+loadBrowser(0);
+
+// ---------------------------------------------------------------------------
+// Output overlay caption.
+// ---------------------------------------------------------------------------
+
+const overlayInput = document.getElementById("overlay-input");
+const overlayBtn = document.getElementById("overlay-btn");
+
+overlayBtn.addEventListener("click", async () => {
+  try {
+    await invoke("scheduler_set_overlay", { text: overlayInput.value });
+    playbackStatus.textContent = "Overlay updated.";
+  } catch (error) {
+    playbackStatus.textContent = `Could not set overlay: ${String(error)}`;
+  }
+});
+overlayInput.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") overlayBtn.click();
+});
 
 (async function initPlayback() {
   await pushPlaylist();

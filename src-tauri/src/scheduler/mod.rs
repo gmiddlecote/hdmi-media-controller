@@ -67,7 +67,7 @@ pub enum Command {
 }
 
 /// Live playback status, serialized to the UI on every change.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Default)]
+#[derive(Clone, Debug, PartialEq, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Snapshot {
     pub playing: bool,
@@ -75,8 +75,32 @@ pub struct Snapshot {
     pub index: usize,
     pub total: usize,
     pub title: Option<String>,
+    /// Absolute path of the currently shown item.
+    pub path: Option<String>,
+    /// Milliseconds the current item has been on screen.
+    pub elapsed_ms: u64,
+    /// Milliseconds a still image stays up (`elapsedMs` reaches it before advance).
+    pub dwell_ms: u64,
+    /// Video position, when the shown item is a video.
+    pub progress: Option<VideoProgress>,
     pub display: Option<String>,
     pub last_error: Option<String>,
+}
+
+/// Position within the currently playing video, in seconds.
+#[derive(Clone, Copy, Debug, PartialEq, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VideoProgress {
+    pub current: f64,
+    pub duration: f64,
+}
+
+/// Video position payload sent by output windows over `media-progress`.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MediaProgressPayload {
+    current: f64,
+    duration: f64,
 }
 
 /// Shared scheduler handle exposed to Tauri commands.
@@ -85,6 +109,7 @@ pub struct State {
     tx: mpsc::Sender<Command>,
     snapshot: Arc<Mutex<Snapshot>>,
     dwell: Arc<Mutex<Duration>>,
+    overlay: Arc<Mutex<String>>,
 }
 
 impl State {
@@ -93,6 +118,7 @@ impl State {
             tx,
             snapshot: Arc::new(Mutex::new(Snapshot::default())),
             dwell: Arc::new(Mutex::new(Duration::from_secs(5))),
+            overlay: Arc::new(Mutex::new(String::new())),
         }
     }
 
@@ -107,6 +133,17 @@ impl State {
         *self.dwell.lock().unwrap() = Duration::from_millis(millis.max(100));
     }
 
+    /// Stores the caption shown on output windows; applied immediately to
+    /// existing windows by the invoking command.
+    pub(crate) fn set_overlay(&self, text: String) {
+        *self.overlay.lock().unwrap() = text;
+    }
+
+    /// Current output caption (empty when none is configured).
+    pub(crate) fn overlay(&self) -> String {
+        self.overlay.lock().unwrap().clone()
+    }
+
     pub(crate) fn snapshot(&self) -> Snapshot {
         self.snapshot.lock().unwrap().clone()
     }
@@ -117,6 +154,8 @@ struct Session {
     label: String,
     /// Win32 device name the window is placed on.
     display: String,
+    /// Absolute path of the item being shown, for the snapshot.
+    path: String,
     kind: MediaKind,
     since: Instant,
 }
@@ -163,6 +202,14 @@ impl Kernel {
             let _ = finished_tx.send(());
         });
 
+        let (progress_tx, progress_rx) = mpsc::channel::<(f64, f64)>();
+        // Output windows emit `media-progress` while a video plays.
+        let _progress_listener = self.app.listen("media-progress", move |event| {
+            if let Ok(payload) = serde_json::from_str::<MediaProgressPayload>(event.payload()) {
+                let _ = progress_tx.send((payload.current, payload.duration));
+            }
+        });
+
         let mut playlist = Playlist::new();
         playlist.set_repeat(RepeatMode::All);
         let mut session: Option<Session> = None;
@@ -170,6 +217,10 @@ impl Kernel {
         let mut playing = false;
         let mut paused = false;
         let mut seq = 0u64;
+        // Last-known video position, valid only while the seq it belongs to matches.
+        let mut progress: Option<VideoProgress> = None;
+        let mut progress_seq = 0u64;
+        let mut last_tick_publish = Instant::now();
 
         loop {
             while let Ok(cmd) = self.receiver.try_recv() {
@@ -244,7 +295,21 @@ impl Kernel {
                         }
                     }
                 }
-                self.publish(&playlist, &session, playing, paused, &single);
+                // Progress from the previous item would be misleading; drop it.
+                if seq != progress_seq {
+                    progress = None;
+                    progress_seq = seq;
+                }
+                self.publish(&playlist, &session, playing, paused, &single, progress);
+            }
+
+            // Adopt any video position updates that arrived since the last tick.
+            if seq != progress_seq {
+                progress = None;
+                progress_seq = seq;
+            }
+            while let Ok((current, duration)) = progress_rx.try_recv() {
+                progress = Some(VideoProgress { current, duration });
             }
 
             if playing && !paused {
@@ -267,7 +332,7 @@ impl Kernel {
 
                     if timed_due {
                         self.stop(&mut session, &mut playing, &mut paused, &mut single);
-                        self.publish(&playlist, &session, playing, paused, &single);
+                        self.publish(&playlist, &session, playing, paused, &single, progress);
                     } else if video_ended || dwell_due {
                         match single.as_ref() {
                             Some(active_single) if active_single.mode != PlayMode::Once => {
@@ -292,14 +357,25 @@ impl Kernel {
                                 }
                             }
                         }
-                        self.publish(&playlist, &session, playing, paused, &single);
+                        self.publish(&playlist, &session, playing, paused, &single, progress);
                     }
+                }
+
+                // Keep a live dwell/elapsed readout for still images on screen.
+                if session
+                    .as_ref()
+                    .is_some_and(|active| active.kind == MediaKind::Image)
+                    && last_tick_publish.elapsed() >= Duration::from_millis(500)
+                {
+                    last_tick_publish = Instant::now();
+                    self.publish(&playlist, &session, playing, paused, &single, progress);
                 }
             }
 
             // Drain stale finish signals that raced a stop/switch.
             if !playing {
                 while finished_rx.try_recv().is_ok() {}
+                progress = None;
             }
 
             std::thread::sleep(TICK);
@@ -339,13 +415,15 @@ impl Kernel {
         };
         *seq += 1;
         let label = renderer::label_for(display, *seq);
-        if let Err(err) = renderer::open(&self.app, &display_info, item, &label) {
+        let overlay = self.state.overlay();
+        if let Err(err) = renderer::open(&self.app, &display_info, item, &label, &overlay) {
             self.set_error(err.to_string());
             return false;
         }
         *session = Some(Session {
             label,
             display: display.to_string(),
+            path: item.path.clone(),
             kind: item.kind,
             since: Instant::now(),
         });
@@ -399,6 +477,7 @@ impl Kernel {
     }
 
     /// Emits the current playback status to the control UI.
+    #[allow(clippy::too_many_arguments)]
     fn publish(
         &self,
         playlist: &Playlist,
@@ -406,6 +485,7 @@ impl Kernel {
         playing: bool,
         paused: bool,
         single: &Option<Single>,
+        progress: Option<VideoProgress>,
     ) {
         let last_error = self.state.snapshot.lock().unwrap().last_error.clone();
         let snapshot = Snapshot {
@@ -420,6 +500,22 @@ impl Kernel {
                 .as_ref()
                 .map(|active| active.title.clone())
                 .or_else(|| playlist.current().map(|item| item.name.clone())),
+            path: session.as_ref().map(|active| active.path.clone()),
+            elapsed_ms: session
+                .as_ref()
+                .map(|active| active.since.elapsed().as_millis() as u64)
+                .unwrap_or(0),
+            dwell_ms: self.state.dwell.lock().unwrap().as_millis() as u64,
+            progress: if playing
+                && !paused
+                && session
+                    .as_ref()
+                    .is_some_and(|active| active.kind == MediaKind::Video)
+            {
+                progress
+            } else {
+                None
+            },
             display: session.as_ref().map(|active| active.display.clone()),
             last_error,
         };
@@ -460,5 +556,39 @@ mod tests {
     fn play_mode_rejects_unknown_values() {
         assert!(serde_json::from_str::<PlayMode>("\"fast\"").is_err());
         assert!(serde_json::from_str::<PlayMode>("\"\"").is_err());
+    }
+
+    #[test]
+    fn snapshot_serializes_progress_fields_as_camel_case() {
+        let snapshot = Snapshot {
+            playing: true,
+            paused: false,
+            index: 2,
+            total: 5,
+            title: Some("clip.mp4".into()),
+            path: Some("C:\\x\\clip.mp4".into()),
+            elapsed_ms: 1234,
+            dwell_ms: 5000,
+            progress: Some(VideoProgress {
+                current: 1.5,
+                duration: 10.0,
+            }),
+            display: Some(r"\\.\DISPLAY1".into()),
+            last_error: None,
+        };
+        let value = serde_json::to_value(&snapshot).unwrap();
+        assert_eq!(value["elapsedMs"], 1234);
+        assert_eq!(value["dwellMs"], 5000);
+        assert_eq!(value["path"], "C:\\x\\clip.mp4");
+        assert_eq!(value["progress"]["current"], 1.5);
+        assert_eq!(value["progress"]["duration"], 10.0);
+    }
+
+    #[test]
+    fn media_progress_payload_parses_renderer_events() {
+        let parsed: MediaProgressPayload =
+            serde_json::from_str(r#"{"current":2.25,"duration":30}"#).unwrap();
+        assert_eq!(parsed.current, 2.25);
+        assert_eq!(parsed.duration, 30.0);
     }
 }

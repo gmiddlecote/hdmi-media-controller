@@ -65,11 +65,14 @@ All checks must be clean before committing.
 ## Conventions
 
 - Don't add code comments unless asked; keep existing module-doc style.
-- Commands: `list_displays`, `get_display_modes`, `set_display_mode`,
-  `scheduler_set_playlist`, `scheduler_play`, `scheduler_play_item`
-  (`mode` = `once`/`loop`/`timed`, `seconds` for timed), `media_register`,
-  `scheduler_pause`/`resume`/`next`/`prev`/`stop`/`set_dwell`/`status`,
+- Commands: `list_displays`, `list_directory` (`directory` → browsable
+  entries), `get_display_modes`, `set_display_mode`, `scheduler_set_playlist`,
+  `scheduler_play`, `scheduler_play_item` (`mode` = `once`/`loop`/`timed`,
+  `seconds` for timed), `media_register`, `scheduler_pause`/`resume`/`next`/
+  `prev`/`stop`/`set_dwell`/`set_overlay` (`text`)/`status`,
   `renderer_render_token`, `renderer_close`, `renderer_close_all`.
-- JS invoke args are camelCase (`deviceName`, `paths`, `millis`); listen to
-  `displays-changed`, `scheduler-state`, `tauri://drag-drop`.
+- JS invoke args are camelCase (`deviceName`, `paths`, `millis`, `directory`);
+  listen to `displays-changed`, `scheduler-state`, `tauri://drag-drop`;
+  backend-emitted to render windows: `output-control`, `overlay-text`;
+  render windows emit `render-finished`, `media-progress`.
 - Release: `git tag vX.Y.Z && git push origin vX.Y.Z`.

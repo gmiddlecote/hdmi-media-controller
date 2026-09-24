@@ -28,6 +28,13 @@ fullscreen on it while the control UI stays on the laptop display.
 - **Per-item controls**: every queued item shows a live thumbnail and can be
   played once, looped, or shown for a selected number of seconds on the
   chosen output.
+- **In-app file browser**: browse folders on disk and add files without
+  drag-and-drop (`list_directory` command).
+- **Playback progress**: the control UI shows the current item's thumbnail
+  with a live dwell countdown for images and elapsed/remaining time for
+  videos.
+- **Output styling**: a configurable caption overlay on the output window and
+  a fade-in transition between items.
 
 ## Architecture
 
@@ -68,6 +75,7 @@ playback, scheduling, and output rendering can be developed independently.
 | Command                 | Returns                | Purpose                                       |
 | ----------------------- | ---------------------- | --------------------------------------------- |
 | `list_displays`         | `Vec<DisplayInfo>`     | Detected displays + connector type + bounds   |
+| `list_directory`        | `Vec<DirectoryEntry>`  | Browse a folder; entries = dir/image/video/other |
 | `get_display_modes`     | `DisplayModes`         | Current mode + supported modes                |
 | `set_display_mode`      | `()`                   | Apply a resolution to a display               |
 | `scheduler_set_playlist`| `usize`                | Replace the playlist (`paths`); returns count |
@@ -80,8 +88,9 @@ playback, scheduling, and output rendering can be developed independently.
 | `scheduler_prev`        | `()`                   | Go back to the previous entry                 |
 | `scheduler_stop`        | `()`                   | Stop playback and close render windows        |
 | `scheduler_set_dwell`   | `()`                   | Image display duration in ms (`millis`, min 100) |
+| `scheduler_set_overlay` | `()`                   | Set the output caption (`text`; empty clears) |
 | `scheduler_status`      | `Snapshot`             | Current playback state (polled)               |
-| `renderer_render_token` | `RenderPayload`        | `media://` URL + kind + title for render.html |
+| `renderer_render_token` | `RenderPayload`        | `media://` URL + kind + title + overlay for render.html |
 | `renderer_close_all`    | `usize`                | Close all renderer windows                    |
 
 Structures are serialized to camelCase JSON. The backend also runs a
@@ -92,22 +101,29 @@ re-enumerates (which refreshes the output-display selector too).
 
 - `displays-changed` — emitted by the hotplug watcher on connect/disconnect.
 - `scheduler-state` — `Snapshot` emitted from the scheduler kernel whenever
-  playback state changes (playing/paused, current item, last error).
+  playback state changes (playing/paused, current item, dwell/video
+  progress, last error).
 - `output-control` — sent by the scheduler to a render window: `true` =
   pause, `false` = resume the video.
 - `render-finished` — emitted by `render.html` when a video ends; the
   scheduler advances to the next item.
+- `media-progress` — emitted by `render.html` while a video plays (`current`
+  and `duration` in seconds); the scheduler forwards it into `scheduler-state`.
+- `overlay-text` — sent by `set_overlay` to every open render window so the
+  caption updates live.
 - `tauri://drag-drop` — built-in Tauri event carrying `paths` when files are
   dropped on a window; the UI adds them to the playlist.
 
 ### Media loading
 
-There is no file-picker plugin and no process spawning. Files are added two
-ways:
+There is no file-picker plugin and no process spawning. Files are added
+three ways:
 
 1. **Drag-and-drop** — the window receives the built-in `tauri://drag-drop`
    event with absolute file paths.
-2. **Manual path** — paste a path into the text field and press Add.
+2. **File browser** — the in-app browser lists a folder (dirs first, then
+   images/videos), navigates up/in, and queues files with one click.
+3. **Manual path** — paste a path into the text field and press Add.
 
 On set, the backend resolves each path to canonical form and records a
 `MediaItem` (`path`, basename, `image`/`video` kind). The queue shows a live

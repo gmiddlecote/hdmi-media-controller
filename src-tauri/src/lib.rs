@@ -16,11 +16,13 @@ pub mod playlist;
 pub mod renderer;
 pub mod scheduler;
 
+use std::fs;
 use std::path::Path;
 
 use display::model::{DisplayInfo, DisplayMode, DisplayModes};
 use media::MediaItem;
-use tauri::Manager;
+use serde::Serialize;
+use tauri::{Emitter, Manager};
 
 #[cfg(target_os = "windows")]
 use std::time::Duration;
@@ -53,6 +55,67 @@ fn set_display_mode(
         bit_depth: 0,
     };
     display::set_display_mode(&device_name, &mode).map_err(|err| err.to_string())
+}
+
+/// A single entry in a directory listing.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DirectoryEntry {
+    name: String,
+    path: String,
+    kind: EntryKind,
+}
+
+/// Coarse type of a directory entry, for the browsing UI.
+#[derive(Serialize)]
+#[serde(rename_all = "lowercase")]
+enum EntryKind {
+    Dir,
+    Image,
+    Video,
+    Other,
+}
+
+/// Lists the contents of a directory so the UI can browse media files.
+/// Folders sort first, then files alphabetically; hidden files are skipped.
+#[tauri::command]
+fn list_directory(directory: String) -> Result<Vec<DirectoryEntry>, String> {
+    let canonical = Path::new(&directory)
+        .canonicalize()
+        .map_err(|_| format!("Directory not found: {directory}"))?;
+    if canonical.is_dir() {
+        let mut entries: Vec<DirectoryEntry> = Vec::new();
+        for entry in fs::read_dir(&canonical).map_err(|err| err.to_string())? {
+            let Ok(entry) = entry else { continue };
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.starts_with('.') {
+                continue;
+            }
+            let path = entry.path();
+            let kind = if path.is_dir() {
+                EntryKind::Dir
+            } else {
+                match media::classify(&path.to_string_lossy()) {
+                    Some(media::MediaKind::Image) => EntryKind::Image,
+                    Some(media::MediaKind::Video) => EntryKind::Video,
+                    None => EntryKind::Other,
+                }
+            };
+            entries.push(DirectoryEntry {
+                name,
+                path: path.to_string_lossy().into_owned(),
+                kind,
+            });
+        }
+        entries.sort_by(|a, b| match (&a.kind, &b.kind) {
+            (EntryKind::Dir, _) => std::cmp::Ordering::Less,
+            (_, EntryKind::Dir) => std::cmp::Ordering::Greater,
+            _ => a.name.cmp(&b.name),
+        });
+        Ok(entries)
+    } else {
+        Err(format!("Not a directory: {directory}"))
+    }
 }
 
 /// Replaces the playback queue from a list of file paths. Files that do not
@@ -152,6 +215,21 @@ fn scheduler_set_dwell(
     Ok(())
 }
 
+/// Sets the caption rendered over output windows. Existing outputs update
+/// immediately; new ones use it from the start. Empty clears the caption.
+#[tauri::command]
+fn scheduler_set_overlay(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, scheduler::State>,
+    text: String,
+) -> Result<(), String> {
+    state.set_overlay(text);
+    for label in app.state::<renderer::RendererState>().labels() {
+        let _ = app.emit_to(label, "overlay-text", state.overlay());
+    }
+    Ok(())
+}
+
 /// Returns the current playback status for the control UI.
 #[tauri::command]
 fn scheduler_status(state: tauri::State<'_, scheduler::State>) -> scheduler::Snapshot {
@@ -228,6 +306,7 @@ pub fn run() {
         .register_uri_scheme_protocol("media", media::serve)
         .invoke_handler(tauri::generate_handler![
             list_displays,
+            list_directory,
             get_display_modes,
             set_display_mode,
             scheduler_set_playlist,
@@ -240,6 +319,7 @@ pub fn run() {
             scheduler_next,
             scheduler_prev,
             scheduler_set_dwell,
+            scheduler_set_overlay,
             scheduler_status,
             renderer_render_token,
             renderer_close,
@@ -247,4 +327,55 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lists_directories_before_files_and_skips_hidden() {
+        let dir = std::env::temp_dir().join(format!("hmc-browse-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        std::fs::write(dir.join(".hidden.png"), "x").unwrap();
+        std::fs::write(dir.join("b.txt"), "x").unwrap();
+        std::fs::write(dir.join("a.jpg"), "x").unwrap();
+        std::fs::write(dir.join("clip.mp4"), "x").unwrap();
+
+        let entries = list_directory(dir.to_string_lossy().into_owned()).unwrap();
+        let kinds: Vec<(String, String)> = entries
+            .iter()
+            .map(|entry| {
+                let kind = serde_json::to_value(&entry.kind)
+                    .unwrap()
+                    .as_str()
+                    .unwrap()
+                    .to_string();
+                (entry.name.clone(), kind)
+            })
+            .collect();
+        assert_eq!(
+            kinds,
+            vec![
+                ("sub".into(), "dir".into()),
+                ("a.jpg".into(), "image".into()),
+                ("b.txt".into(), "other".into()),
+                ("clip.mp4".into(), "video".into()),
+            ]
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn rejects_missing_or_non_directory_paths() {
+        let missing =
+            std::env::temp_dir().join(format!("hmc-browse-missing-{}", std::process::id()));
+        assert!(list_directory(missing.to_string_lossy().into_owned()).is_err());
+
+        let file = std::env::temp_dir().join(format!("hmc-browse-file-{}", std::process::id()));
+        std::fs::write(&file, "x").unwrap();
+        assert!(list_directory(file.to_string_lossy().into_owned()).is_err());
+        let _ = std::fs::remove_file(&file);
+    }
 }

@@ -35,6 +35,8 @@ pub struct RenderPayload {
     pub kind: MediaKind,
     /// Friendly title shown as the window title and element fallback text.
     pub title: String,
+    /// Optional caption rendered over the bottom edge of the output.
+    pub overlay: String,
 }
 
 /// Tracks open output windows, keyed by their webview label.
@@ -100,6 +102,7 @@ pub fn open(
     display: &crate::display::model::DisplayInfo,
     item: &MediaItem,
     label: &str,
+    overlay: &str,
 ) -> Result<(), RendererError> {
     let bounds = display.bounds;
     if bounds.width == 0 || bounds.height == 0 {
@@ -129,6 +132,7 @@ pub fn open(
         media_url: media_url.clone(),
         kind: item.kind,
         title: item.name.clone(),
+        overlay: overlay.to_string(),
     };
     app.state::<RendererState>()
         .0

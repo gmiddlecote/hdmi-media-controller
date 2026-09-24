@@ -48,19 +48,31 @@ impl MediaItem {
     }
 }
 
+/// File extensions treated as images.
+pub const IMAGE_EXTS: &[&str] = &["jpg", "jpeg", "png", "gif", "webp", "bmp", "svg", "ico"];
+
+/// File extensions treated as videos.
+pub const VIDEO_EXTS: &[&str] = &["mp4", "webm", "mov", "mkv", "avi", "ogv", "m4v"];
+
+/// Recognizes an extension as playable media, or `None` for anything else.
+pub fn classify(path: &str) -> Option<MediaKind> {
+    let ext = Path::new(path)
+        .extension()
+        .map(|ext| ext.to_string_lossy().to_ascii_lowercase());
+    match ext.as_deref() {
+        Some(ext) if IMAGE_EXTS.contains(&ext) => Some(MediaKind::Image),
+        Some(ext) if VIDEO_EXTS.contains(&ext) => Some(MediaKind::Video),
+        _ => None,
+    }
+}
+
 /// Guesses the media kind from a file extension.
 ///
 /// Unsupported extensions are treated as images so that a non-media file
 /// still flows to the renderer and is shown with its natural `content-type`
 /// (e.g. text); the renderer is the last arbiter of what it can display.
 pub fn kind_from_path(path: &str) -> MediaKind {
-    let ext = Path::new(path)
-        .extension()
-        .map(|ext| ext.to_string_lossy().to_ascii_lowercase());
-    match ext.as_deref() {
-        Some("mp4" | "webm" | "mov" | "mkv" | "avi" | "ogv" | "m4v") => MediaKind::Video,
-        _ => MediaKind::Image,
-    }
+    classify(path).unwrap_or(MediaKind::Image)
 }
 
 /// Returns the MIME type used when serving a media id over `media://`.
@@ -102,7 +114,10 @@ struct RegistryInner {
 }
 
 impl Registry {
-    /// Returns the `media://<id>` URL for a file, registering it if needed.
+    /// Returns the `media://localhost/<id>` URL for a file, registering it
+    /// if needed. The id lives in the *path* — webviews deliver the path to
+    /// custom-scheme handlers; an id in the authority (`media://<id>`)
+    /// shows up as an empty path and cannot be routed to the file.
     pub fn register(&self, item: MediaItem) -> String {
         let mut inner = self.0.lock().unwrap();
         let id = match inner
@@ -118,7 +133,7 @@ impl Registry {
                 id
             }
         };
-        format!("media://{id}")
+        format!("media://localhost/{id}")
     }
 
     /// Looks up a registered item by its numeric id.
@@ -132,10 +147,39 @@ impl Registry {
     }
 }
 
-/// Parses the numeric id from a `media://<id>` URL's path.
+/// Parses the numeric id from a `media://` URL: `media://localhost/<id>`
+/// (the form produced by [`Registry::register`]) or the legacy
+/// `media://<id>` shape where the id sits in the authority.
 pub fn id_from_url(url: &str) -> Option<u64> {
-    let id = url.strip_prefix("media://")?;
-    id.parse().ok()
+    let rest = url.strip_prefix("media://")?;
+    let token = rest
+        .rsplit('/')
+        .map(|part| {
+            part.split('?')
+                .next()
+                .unwrap_or("")
+                .split('#')
+                .next()
+                .unwrap_or("")
+        })
+        .find(|part| !part.is_empty())
+        .unwrap_or("");
+    token.parse().ok()
+}
+
+/// Extracts the numeric id from a media request's URI. Tolerates webviews
+/// that deliver the id as a bare path (`media://localhost/N`, `/N`) and the
+/// legacy authority form (`media://N`).
+fn id_from_request(uri: &tauri::http::Uri) -> Option<u64> {
+    id_from_url(&uri.to_string()).or_else(|| {
+        uri.path()
+            .trim_start_matches('/')
+            .rsplit('/')
+            .next()
+            .unwrap_or("")
+            .parse()
+            .ok()
+    })
 }
 
 /// Absolute path of a file, or `None` when it exists but is a directory.
@@ -160,11 +204,8 @@ pub fn serve(
     use tauri::http::{Response, StatusCode};
     use tauri::Manager;
 
-    let id = request.uri().path().trim_start_matches('/').parse::<u64>();
-    let Some(item) = id
-        .ok()
-        .and_then(|id| ctx.app_handle().state::<Registry>().get(id))
-    else {
+    let id = id_from_request(request.uri());
+    let Some(item) = id.and_then(|id| ctx.app_handle().state::<Registry>().get(id)) else {
         return not_found();
     };
 
@@ -251,6 +292,17 @@ mod tests {
     }
 
     #[test]
+    fn classifies_only_recognized_extensions() {
+        assert_eq!(classify("/x/a.png"), Some(MediaKind::Image));
+        assert_eq!(classify("/x/a.gif"), Some(MediaKind::Image));
+        assert_eq!(classify("/x/a.mp4"), Some(MediaKind::Video));
+        assert_eq!(classify("/x/a.MKV"), Some(MediaKind::Video));
+        assert_eq!(classify("/x/a.txt"), None);
+        assert_eq!(classify("/x/no-ext"), None);
+        assert_eq!(classify("/x/archive.gz"), None);
+    }
+
+    #[test]
     fn maps_content_types() {
         assert_eq!(mime_for(MediaKind::Image, "a.jpg"), "image/jpeg");
         assert_eq!(mime_for(MediaKind::Image, "a.png"), "image/png");
@@ -262,12 +314,32 @@ mod tests {
     fn registers_and_resolves_ids() {
         let registry = Registry::default();
         let url = registry.register(items()[0].clone());
-        assert!(url.starts_with("media://"));
+        assert!(url.starts_with("media://localhost/"));
         let id = id_from_url(&url).expect("id parses");
         assert_eq!(registry.get(id), Some(items()[0].clone()));
 
         let same = registry.register(items()[0].clone());
         assert_eq!(same, url);
+    }
+
+    #[test]
+    fn parsing_handles_path_authority_and_query_forms() {
+        assert_eq!(id_from_url("media://localhost/0"), Some(0));
+        assert_eq!(id_from_url("media://localhost/42"), Some(42));
+        assert_eq!(id_from_url("media://7"), Some(7));
+        assert_eq!(id_from_url("media://localhost/3?range=yes"), Some(3));
+        assert_eq!(id_from_url("media://localhost/3#frag"), Some(3));
+        assert_eq!(id_from_url("media://localhost/"), None);
+        assert_eq!(id_from_url("media://"), None);
+        assert_eq!(id_from_url("not-media://1"), None);
+
+        // Bare-path requests (some webviews deliver just `/N`).
+        let uri: tauri::http::Uri = "/9".parse().unwrap();
+        assert_eq!(id_from_request(&uri), Some(9));
+        let uri: tauri::http::Uri = "media://localhost/11".parse().unwrap();
+        assert_eq!(id_from_request(&uri), Some(11));
+        let uri: tauri::http::Uri = "media://13".parse().unwrap();
+        assert_eq!(id_from_request(&uri), Some(13));
     }
 
     #[test]
@@ -278,7 +350,7 @@ mod tests {
         registry.release(id);
         assert_eq!(registry.get(id), None);
         assert_eq!(registry.get(999), None);
-        assert_eq!(id_from_url("media://"), None);
+        assert_eq!(id_from_url("media://localhost/"), None);
         assert_eq!(id_from_url("http://x"), None);
     }
 

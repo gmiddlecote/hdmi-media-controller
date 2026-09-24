@@ -24,6 +24,19 @@
 
       <section class="panel">
         <div class="panel-head">
+          <h2>File browser</h2>
+          <button id="browse-up-btn" type="button">Up</button>
+        </div>
+        <p id="browser-status" class="card-status">Enter a folder below to browse for media.</p>
+        <div class="path-row">
+          <input id="browse-input" type="text" placeholder="Folder path, e.g. C:\media" autocomplete="off" spellcheck="false" />
+          <button id="browse-go-btn" type="button">Open</button>
+        </div>
+        <div id="browser" class="browser" aria-live="polite"></div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
           <h2>Playback</h2>
         </div>
 
@@ -36,6 +49,23 @@
         </div>
 
         <ol id="queue" class="queue" aria-live="polite"></ol>
+
+        <div class="now-playing hidden" id="now-playing">
+          <div id="np-thumb" class="np-thumb"></div>
+          <div class="np-info">
+            <span id="np-title" class="np-title"></span>
+            <div class="np-bar"><div id="np-fill" class="np-fill"></div></div>
+            <span id="np-time" class="np-time"></span>
+          </div>
+        </div>
+
+        <div class="overlay-row">
+          <label class="overlay">
+            Overlay
+            <input id="overlay-input" type="text" placeholder="Caption shown at the bottom of the output (leave empty to clear)" autocomplete="off" spellcheck="false" />
+          </label>
+          <button id="overlay-btn" type="button">Apply</button>
+        </div>
 
         <div class="playback-row">
           <select id="output-display" class="mode-select" aria-label="Output display"></select>
