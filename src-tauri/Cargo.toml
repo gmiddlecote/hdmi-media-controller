@@ -1,6 +1,6 @@
 [package]
 name = "hdmi-media-controller"
-version = "0.2.3"
+version = "0.2.4"
 description = "Windows desktop app to control media playback on external HDMI displays"
 edition = "2021"
 

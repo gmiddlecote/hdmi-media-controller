@@ -65,18 +65,40 @@
     </style>
   </head>
   <body>
-    <div id="stage">No media assigned to this output.</div>
+    <div id="stage"></div>
     <script>
       (function () {
-        const core = window.__TAURI__.core;
-        const event = window.__TAURI__.event;
-        const stage = document.getElementById("stage");
-        const label = window.__TAURI__.window.getCurrentWindow().label;
+        var stage = document.getElementById("stage");
 
         function fail(message) {
           stage.className = "pre-line";
           stage.textContent = message;
         }
+
+        window.addEventListener("error", function (evt) {
+          fail("Uncaught error: " + (evt && evt.message ? evt.message : String(evt)));
+        });
+        window.addEventListener("unhandledrejection", function (evt) {
+          fail("Unhandled rejection: " + (evt && evt.reason ? String(evt.reason) : String(evt)));
+        });
+
+        fail("Initialising output window...");
+        if (!window.__TAURI__) {
+          fail("Fatal: Tauri API was not injected (window.__TAURI__ missing).");
+          return;
+        }
+
+        var core = window.__TAURI__.core;
+        var event = window.__TAURI__.event;
+
+        var label;
+        try {
+          label = window.__TAURI__.window.getCurrentWindow().label;
+        } catch (_) {
+          label = window.__TAURI__.webview.getCurrentWebview().label;
+        }
+
+        fail("Output window ready (" + label + ")...");
 
         function failWithDiagnostics(base) {
           core
@@ -177,10 +199,10 @@
             // it so ghosts do not linger on the output display.
             core.invoke("renderer_close", { label: label }).then(
               function () {
-                setTimeout(closeSelf, 5000);
+                setTimeout(closeSelf, 20000);
               },
               function () {
-                setTimeout(closeSelf, 5000);
+                setTimeout(closeSelf, 20000);
               }
             );
           });
