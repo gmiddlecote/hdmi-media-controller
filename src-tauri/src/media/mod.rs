@@ -269,6 +269,48 @@ fn not_found() -> tauri::http::Response<Vec<u8>> {
         .unwrap_or_else(|_| tauri::http::Response::default())
 }
 
+/// Diagnostics for a single `media://` URL, shown on the renderer when a
+/// load fails so the cause (id routing, registry, missing file) is visible.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MediaProbe {
+    pub url: String,
+    pub id: Option<u64>,
+    pub registered: bool,
+    pub path: Option<String>,
+    pub exists: bool,
+    pub size: Option<u64>,
+    pub kind: Option<String>,
+    pub mime: Option<String>,
+}
+
+/// Collects everything the protocol handler would need to serve `url`.
+pub fn probe(url: &str, registry: &Registry) -> MediaProbe {
+    let id = id_from_url(url);
+    let item = id.and_then(|id| registry.get(id));
+    let path = item.as_ref().map(|item| item.path.clone());
+    let exists = path.as_ref().is_some_and(|path| Path::new(path).is_file());
+    let size = path
+        .as_ref()
+        .and_then(|path| std::fs::metadata(path).ok())
+        .map(|meta| meta.len());
+    let kind = item.as_ref().map(|item| match item.kind {
+        MediaKind::Image => "image",
+        MediaKind::Video => "video",
+    });
+    let mime = item.as_ref().map(|item| mime_for(item.kind, &item.path));
+    MediaProbe {
+        url: url.to_string(),
+        id,
+        registered: item.is_some(),
+        path,
+        exists,
+        size,
+        kind: kind.map(str::to_string),
+        mime,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -360,6 +402,28 @@ mod tests {
         assert_eq!(item.name, "logo.png");
         assert_eq!(item.kind, MediaKind::Image);
         assert_eq!(item.path, "/somewhere/logo.png");
+    }
+
+    #[test]
+    fn probe_reports_registry_and_disk_state() {
+        let dir = std::env::temp_dir().join(format!("hmc-probe-{}", std::process::id()));
+        std::fs::write(&dir, "fake-image-bytes").unwrap();
+        let registry = Registry::default();
+        let url = registry.register(MediaItem::from_path(dir.to_string_lossy().into_owned()));
+
+        let info = probe(&url, &registry);
+        assert_eq!(info.id, id_from_url(&url));
+        assert!(info.registered);
+        assert_eq!(info.kind.as_deref(), Some("image"));
+        assert!(info.exists);
+        assert_eq!(info.size, Some(16));
+        assert_eq!(info.mime.as_deref(), Some("application/octet-stream"));
+
+        let missing_info = probe("media://localhost/999", &registry);
+        assert!(!missing_info.registered);
+        assert!(!missing_info.exists);
+
+        let _ = std::fs::remove_file(&dir);
     }
 
     #[test]

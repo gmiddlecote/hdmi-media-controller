@@ -27,6 +27,12 @@
       #stage.media {
         padding: 0;
       }
+      #stage.pre-line {
+        white-space: pre-line;
+        font-family: ui-monospace, Consolas, monospace;
+        font-size: 13px;
+        text-align: left;
+      }
       img,
       video {
         display: block;
@@ -68,8 +74,29 @@
         const label = window.__TAURI__.webview.getCurrentWebview().label;
 
         function fail(message) {
-          stage.className = "";
+          stage.className = "pre-line";
           stage.textContent = message;
+        }
+
+        function failWithDiagnostics(base) {
+          core
+            .invoke("media_probe", { url: payload.mediaUrl })
+            .then(function (probe) {
+              fail(
+                base +
+                  "\nURL: " + probe.url +
+                  "\nid: " + (probe.id === null ? "none" : String(probe.id)) +
+                  "  registered: " + probe.registered +
+                  "  kind: " + (probe.kind || "unknown") +
+                  "  mime: " + (probe.mime || "unknown") +
+                  "\npath: " + (probe.path || "none") +
+                  "\nexists: " + probe.exists +
+                  "  size: " + (probe.size === null ? "unknown" : probe.size + " bytes")
+              );
+            })
+            .catch(function () {
+              fail(base);
+            });
         }
 
         function setOverlay(text) {
@@ -109,7 +136,7 @@
                 });
               });
               video.addEventListener("error", function () {
-                fail("Video could not be decoded: " + (payload.title || payload.mediaUrl));
+                failWithDiagnostics("Video could not be decoded: " + (payload.title || payload.mediaUrl));
               });
               video.src = payload.mediaUrl;
               stage.className = "media";
@@ -124,7 +151,7 @@
               const img = document.createElement("img");
               img.alt = "";
               img.addEventListener("error", function () {
-                fail("Image could not be decoded: " + (payload.title || payload.mediaUrl));
+                failWithDiagnostics("Image could not be decoded: " + (payload.title || payload.mediaUrl));
               });
               img.src = payload.mediaUrl;
               stage.className = "media";

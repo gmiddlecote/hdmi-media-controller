@@ -179,6 +179,13 @@ fn media_register(app: tauri::AppHandle, path: String) -> Result<String, String>
     Ok(app.state::<media::Registry>().register(item))
 }
 
+/// Returns diagnostics for a `media://` URL so a failing renderer can show
+/// whether the id parsed, the file is registered, and is present on disk.
+#[tauri::command]
+fn media_probe(app: tauri::AppHandle, url: String) -> media::MediaProbe {
+    media::probe(&url, &app.state::<media::Registry>())
+}
+
 /// Stops playback and closes the output window.
 #[tauri::command]
 fn scheduler_stop(state: tauri::State<'_, scheduler::State>) -> Result<(), String> {
@@ -313,6 +320,7 @@ pub fn run() {
             scheduler_play,
             scheduler_play_item,
             media_register,
+            media_probe,
             scheduler_stop,
             scheduler_pause,
             scheduler_resume,
