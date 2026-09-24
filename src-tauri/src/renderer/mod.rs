@@ -111,7 +111,22 @@ pub fn open(
 
     let media_url = app.state::<Registry>().register(item.clone());
 
-    let window = WebviewWindowBuilder::new(
+    let payload = RenderPayload {
+        media_url: media_url.clone(),
+        kind: item.kind,
+        title: item.name.clone(),
+        overlay: overlay.to_string(),
+    };
+    // Register the payload *before* building the window: a newly created
+    // webview can start executing render.html (and invoke the token) before
+    // open() would otherwise get around to inserting this entry.
+    app.state::<RendererState>()
+        .0
+        .lock()
+        .unwrap()
+        .insert(label.to_string(), RenderSession { payload });
+
+    let window = match WebviewWindowBuilder::new(
         app,
         label.to_string(),
         WebviewUrl::App("render.html".into()),
@@ -124,21 +139,15 @@ pub fn open(
     .position(bounds.x as f64, bounds.y as f64)
     .inner_size(bounds.width as f64, bounds.height as f64)
     .build()
-    .map_err(|err| RendererError::Creation(err.to_string()))?;
+    {
+        Ok(window) => window,
+        Err(err) => {
+            app.state::<RendererState>().0.lock().unwrap().remove(label);
+            return Err(RendererError::Creation(err.to_string()));
+        }
+    };
 
     let _ = window.set_fullscreen(true);
-
-    let payload = RenderPayload {
-        media_url: media_url.clone(),
-        kind: item.kind,
-        title: item.name.clone(),
-        overlay: overlay.to_string(),
-    };
-    app.state::<RendererState>()
-        .0
-        .lock()
-        .unwrap()
-        .insert(label.to_string(), RenderSession { payload });
 
     Ok(())
 }

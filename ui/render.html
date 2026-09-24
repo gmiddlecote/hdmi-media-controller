@@ -71,7 +71,7 @@
         const core = window.__TAURI__.core;
         const event = window.__TAURI__.event;
         const stage = document.getElementById("stage");
-        const label = window.__TAURI__.webview.getCurrentWebview().label;
+        const label = window.__TAURI__.window.getCurrentWindow().label;
 
         function fail(message) {
           stage.className = "pre-line";
@@ -111,6 +111,13 @@
             stage.append(el);
           }
           el.textContent = String(text);
+        }
+
+        // Last resort for an orphaned output window: close it from the webview.
+        function closeSelf() {
+          try {
+            window.__TAURI__.window.getCurrentWindow().close();
+          } catch (_) {}
         }
 
         core
@@ -159,7 +166,23 @@
             }
           })
           .catch(function (err) {
-            fail("No media assigned: " + String(err));
+            fail(
+              "No media assigned to this window (" +
+                label +
+                "): " +
+                String(err)
+            );
+            // A real output window always has a session; a window polling without
+            // one is a leftover. Keep the error readable briefly, then close
+            // it so ghosts do not linger on the output display.
+            core.invoke("renderer_close", { label: label }).then(
+              function () {
+                setTimeout(closeSelf, 5000);
+              },
+              function () {
+                setTimeout(closeSelf, 5000);
+              }
+            );
           });
 
         event.listen("overlay-text", function (evt) {
