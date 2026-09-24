@@ -18,14 +18,11 @@ use std::sync::Mutex;
 use serde::Serialize;
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 
-use crate::media::{self, id_from_url, MediaItem, MediaKind, Registry};
+use crate::media::{self, MediaItem, MediaKind, Registry};
 
 /// One open output window and what it is showing.
 pub struct RenderSession {
     payload: RenderPayload,
-    /// `media://<id>` URL the renderer page was given; used to release the
-    /// registry entry when the window closes.
-    media_url: String,
 }
 
 /// What the `render.html` page needs to show media in an output window.
@@ -137,24 +134,23 @@ pub fn open(
         .0
         .lock()
         .unwrap()
-        .insert(label.to_string(), RenderSession { payload, media_url });
+        .insert(label.to_string(), RenderSession { payload });
 
     Ok(())
 }
 
-/// Closes the output with `label`, releasing its media registration.
-/// Returns whether a window was actually open.
+/// Closes the output with `label`. Registry entries are intentionally kept
+/// — the control UI shows live thumbnails for every queued item via
+/// `media://`, and the registry deduplicates by path. Returns whether a
+/// window was actually open.
 pub fn close(app: &AppHandle, label: &str) -> bool {
     let state = app.state::<RendererState>();
     let mut sessions = state.0.lock().unwrap();
-    let Some(session) = sessions.remove(label) else {
+    let Some(_session) = sessions.remove(label) else {
         return false;
     };
     drop(sessions);
 
-    if let Some(id) = id_from_url(&session.media_url) {
-        app.state::<Registry>().release(id);
-    }
     if let Some(window) = app.get_webview_window(label) {
         let _ = window.close();
     }

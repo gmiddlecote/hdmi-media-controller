@@ -84,17 +84,36 @@ fn scheduler_play(
     })
 }
 
-/// Plays a single file once on the named display (preview).
+/// Plays one specific file on the named display with the requested mode
+/// (`once`, `loop`, or `timed`). `seconds` applies to `timed`.
 #[tauri::command]
-fn renderer_show(
+fn scheduler_play_item(
     state: tauri::State<'_, scheduler::State>,
     path: String,
     device_name: String,
+    mode: scheduler::PlayMode,
+    seconds: u64,
 ) -> Result<(), String> {
-    state.send(scheduler::Command::Show {
-        path,
+    let canonical = media::canonical_path(Path::new(&path))
+        .map(|path| path.to_string_lossy().into_owned())
+        .ok_or_else(|| format!("File not found: {path}"))?;
+    state.send(scheduler::Command::PlayItem {
+        path: canonical,
         display: device_name,
+        mode,
+        seconds,
     })
+}
+
+/// Registers a file and returns its `media://` url, so the queue can show
+/// live thumbnails. Existing files reuse their id.
+#[tauri::command]
+fn media_register(app: tauri::AppHandle, path: String) -> Result<String, String> {
+    let canonical = media::canonical_path(Path::new(&path))
+        .map(|path| path.to_string_lossy().into_owned())
+        .ok_or_else(|| format!("File not found: {path}"))?;
+    let item = MediaItem::from_path(canonical);
+    Ok(app.state::<media::Registry>().register(item))
 }
 
 /// Stops playback and closes the output window.
@@ -213,7 +232,8 @@ pub fn run() {
             set_display_mode,
             scheduler_set_playlist,
             scheduler_play,
-            renderer_show,
+            scheduler_play_item,
+            media_register,
             scheduler_stop,
             scheduler_pause,
             scheduler_resume,

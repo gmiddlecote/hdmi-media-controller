@@ -216,12 +216,96 @@ function syncOutputSelect(displays) {
   }
 }
 
+const VIDEO_RE = /\.(mp4|webm|mov|mkv|avi|ogv|m4v)$/i;
+
+function mediaKind(path) {
+  return VIDEO_RE.test(path) ? "video" : "image";
+}
+
+/// Starts one specific queued item with the chosen mode on the selected
+/// output display. `mode` is `once`, `loop`, or `timed` (backend enum).
+async function playItem(path, mode, seconds) {
+  const device = outputDisplay.value;
+  if (!device) {
+    playbackStatus.textContent = "Choose an output display first.";
+    return;
+  }
+  try {
+    await invoke("scheduler_play_item", {
+      path,
+      deviceName: device,
+      mode,
+      seconds: seconds > 0 ? seconds : 5,
+    });
+  } catch (error) {
+    playbackStatus.textContent = `Could not play: ${String(error)}`;
+  }
+}
+
 function renderQueue() {
   queueEl.replaceChildren();
   queuedPaths.forEach((path, index) => {
     const item = el("li", "queued-item");
+
+    // Thumbnail area — click = play once. A live frame comes from the
+    // media:// url (img for images, video poster for videos); the kind
+    // badge stays as a fallback when decoding fails.
+    const media = el("div", "queued-media");
+    media.title = "Play once";
+    const kindBadge = el("span", "queued-kind", mediaKind(path).toUpperCase());
+    media.append(kindBadge);
+    media.addEventListener("click", () => playItem(path, "once", 0));
+
+    const loadThumb = (url) => {
+      const showBadge = () => kindBadge.remove();
+      if (mediaKind(path) === "video") {
+        const video = el("video", "thumb");
+        video.muted = true;
+        video.playsInline = true;
+        video.preload = "metadata";
+        video.addEventListener("loadedmetadata", showBadge);
+        video.addEventListener("error", () => video.remove());
+        video.src = url;
+        media.append(video);
+      } else {
+        const img = el("img", "thumb");
+        img.alt = "";
+        img.addEventListener("load", showBadge);
+        img.addEventListener("error", () => img.remove());
+        img.src = url;
+        media.append(img);
+      }
+    };
+    invoke("media_register", { path })
+      .then(loadThumb)
+      .catch(() => {});
+
     const name = path.split(/[\\/]/).pop() || path;
-    const kind = /\.(mp4|webm|mov|mkv|avi|ogv|m4v)$/i.test(path) ? "video" : "image";
+
+    const body = el("div", "queued-body");
+    const nameEl = el("span", "queued-name", name);
+    nameEl.title = path + "\nClick to play once";
+    nameEl.addEventListener("click", () => playItem(path, "once", 0));
+
+    const actions = el("div", "queued-actions");
+    const once = el("button", "action", "Once");
+    once.title = "Play this item once, then stop";
+    once.addEventListener("click", () => playItem(path, "once", 0));
+    const loop = el("button", "action", "Loop");
+    loop.title = "Play this item continuously until stopped";
+    loop.addEventListener("click", () => playItem(path, "loop", 0));
+    const seconds = el("input", "seconds");
+    seconds.type = "number";
+    seconds.min = "1";
+    seconds.step = "1";
+    seconds.value = "5";
+    seconds.title = "Seconds to show this item";
+    seconds.addEventListener("click", (event) => event.stopPropagation());
+    const timed = el("button", "action", "Secs");
+    timed.title = "Play this item for the set number of seconds, then stop";
+    timed.addEventListener("click", () => {
+      playItem(path, "timed", Number(seconds.value) || 5);
+    });
     const remove = el("button", "queued-remove", "\u2715");
     remove.title = "Remove from playlist";
     remove.disabled = index === activeIndex;
@@ -230,7 +314,10 @@ function renderQueue() {
       renderQueue();
       pushPlaylist();
     });
-    item.append(el("span", "queued-kind", kind), el("span", "queued-name", name), remove);
+
+    actions.append(once, loop, seconds, timed, remove);
+    body.append(nameEl, actions);
+    item.append(media, body);
     queueEl.append(item);
   });
   dropzoneHint.textContent =

@@ -48,6 +48,16 @@ impl Playlist {
         self.items.get(self.index)
     }
 
+    /// Borrows the queued items as a slice.
+    pub fn items(&self) -> &[MediaItem] {
+        &self.items
+    }
+
+    /// First queue position holding the given path, if any.
+    pub fn position(&self, path: &str) -> Option<usize> {
+        self.items.iter().position(|item| item.path == path)
+    }
+
     /// Cursor position (index into the queue).
     pub fn index(&self) -> usize {
         self.index
@@ -206,5 +216,21 @@ mod tests {
         playlist.remove(0);
         assert_eq!(playlist.index(), 0);
         assert_eq!(playlist.current().unwrap().name, "b.png");
+    }
+
+    #[test]
+    fn position_locates_items_and_items_borrows_queue() {
+        let mut playlist = Playlist::new();
+        playlist.replace(media(&["a", "b", "c"]));
+        assert_eq!(playlist.position("/x/b.png"), Some(1));
+        assert_eq!(playlist.position("/x/nope.png"), None);
+        assert_eq!(
+            playlist
+                .items()
+                .iter()
+                .map(|item| item.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["a.png", "b.png", "c.png"]
+        );
     }
 }

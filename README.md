@@ -25,6 +25,9 @@ fullscreen on it while the control UI stays on the laptop display.
 - **Playlists and scheduled playback**: a background scheduler kernel
   advances the playlist, dwells on images, pauses/resumes on demand, and
   drives render windows (`playlist` + `scheduler` modules).
+- **Per-item controls**: every queued item shows a live thumbnail and can be
+  played once, looped, or shown for a selected number of seconds on the
+  chosen output.
 
 ## Architecture
 
@@ -68,7 +71,9 @@ playback, scheduling, and output rendering can be developed independently.
 | `get_display_modes`     | `DisplayModes`         | Current mode + supported modes                |
 | `set_display_mode`      | `()`                   | Apply a resolution to a display               |
 | `scheduler_set_playlist`| `usize`                | Replace the playlist (`paths`); returns count |
-| `scheduler_play`        | `()`                   | Start playback on a display (`deviceName`)    |
+| `scheduler_play`        | `()`                   | Start stepping the playlist on a display      |
+| `scheduler_play_item`   | `()`                   | Play one item: `mode` = `once`/`loop`/`timed`, `seconds` for timed |
+| `media_register`        | `media://<id>` url     | Register a file; used for live thumbnails     |
 | `scheduler_pause`       | `()`                   | Pause the currently playing video             |
 | `scheduler_resume`      | `()`                   | Resume the paused video                       |
 | `scheduler_next`        | `()`                   | Advance to the next playlist entry            |
@@ -77,7 +82,6 @@ playback, scheduling, and output rendering can be developed independently.
 | `scheduler_set_dwell`   | `()`                   | Image display duration in ms (`millis`, min 100) |
 | `scheduler_status`      | `Snapshot`             | Current playback state (polled)               |
 | `renderer_render_token` | `RenderPayload`        | `media://` URL + kind + title for render.html |
-| `renderer_show`         | `()`                   | Preview a single file on a display            |
 | `renderer_close_all`    | `usize`                | Close all renderer windows                    |
 
 Structures are serialized to camelCase JSON. The backend also runs a
@@ -106,12 +110,18 @@ ways:
 2. **Manual path** — paste a path into the text field and press Add.
 
 On set, the backend resolves each path to canonical form and records a
-`MediaItem` (`path`, basename, `image`/`video` kind). The scheduler opens a
-renderer window on the target display, and `render.html` asks for a
-`media://<id>` URL via `renderer_render_token`. The `media://` protocol
-handler streams the file bytes with `Accept-Ranges`/`Range` support so long
-videos seek correctly. CSP grants the renderer `img-src`/`media-src` access
-to the `media:` scheme.
+`MediaItem` (`path`, basename, `image`/`video` kind). The queue shows a live
+thumbnail per item (the webview decodes the file straight from the
+`media://` url) plus three play choices: **Once** (play to the end, then
+stop), **Loop** (play continuously until stopped), and **Secs** (show for a
+selectable number of seconds). Clicking a thumbnail or its name plays the
+item once on the selected output. The scheduler opens a renderer window on
+the target display, and `render.html` asks for a `media://<id>` URL via
+`renderer_render_token`. The `media://` protocol handler streams the file
+bytes with `Accept-Ranges`/`Range` support so long videos seek correctly.
+CSP grants the renderer `img-src`/`media-src` access to the `media:` scheme.
+Registry entries are kept for the whole session (deduplicated by path), so
+thumbnails never 404 when outputs close.
 
 ### Playback scheduler
 
@@ -122,6 +132,10 @@ A kernel thread polls a command channel every 50 ms and also listens for
   UI) then advance automatically.
 - Videos play to the end and advance on the `render-finished` event.
 - Pause/resume applies to the active video window via `output-control`.
+- Single items (queue clicks) can run in `once`, `loop`, or `timed` mode —
+  `loop` restarts the item on finish, `timed` shows it for the requested
+  seconds (videos loop inside the slot if they end early, and cut off if
+  they run long).
 - Playlist repeat is forced to repeat-all so shows run until stopped.
 - The snapshot (`scheduler_status` / `scheduler-state`) keeps the UI's
   play/pause/next buttons and the active queue item in sync.

@@ -10,24 +10,48 @@
 //! they finish. Playlist exhaustion follows [`RepeatMode`]: the kernel
 //! stops when an `Off` playlist ends and wraps when `All` is set.
 //!
+//! Besides stepping through the playlist, the kernel can drive a *single*
+//! item (from a queue click) in [`PlayMode::Once`], [`PlayMode::Loop`], or
+//! [`PlayMode::Timed`] — the last showing the item for a fixed number of
+//! seconds and stopping.
+//!
 //! The kernel never uses the Tauri main/command thread for window
 //! creation (deadlock risk on Windows with `WebviewWindowBuilder`).
 
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Listener};
 
 use crate::media::{MediaItem, MediaKind};
 use crate::playlist::{Playlist, RepeatMode};
 use crate::renderer;
 
+/// How a single item (clicked in the queue) is played.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PlayMode {
+    /// Play the item to its natural end, then stop.
+    Once,
+    /// Play the item over and over until stopped.
+    Loop,
+    /// Show the item for a fixed number of seconds, then stop.
+    Timed,
+}
+
 /// Signals the kernel can receive.
 #[derive(Debug)]
 pub enum Command {
     /// Start stepping through the playlist on the named display.
     Play { display: String },
+    /// Play one specific item on the named display.
+    PlayItem {
+        path: String,
+        display: String,
+        mode: PlayMode,
+        seconds: u64,
+    },
     /// Stop playback and close the output window.
     Stop,
     /// Pause advancing / video playback.
@@ -40,8 +64,6 @@ pub enum Command {
     Prev,
     /// Replace the playlist (files already validated by the caller).
     SetPlaylist(Vec<MediaItem>),
-    /// Play a single file once (preview) on the named display.
-    Show { path: String, display: String },
 }
 
 /// Live playback status, serialized to the UI on every change.
@@ -99,6 +121,18 @@ struct Session {
     since: Instant,
 }
 
+/// A single item played on its own (from a queue click), not via the playlist.
+struct Single {
+    /// Absolute path of the item being shown, for restarts.
+    path: String,
+    title: String,
+    /// Queue position of the item, so the UI can highlight it.
+    index: Option<usize>,
+    mode: PlayMode,
+    /// Seconds the item stays on screen for `PlayMode::Timed`.
+    seconds: u64,
+}
+
 /// How long the kernel waits between decision ticks. Small enough for
 /// responsive image dwell, large enough to keep idle CPU negligible.
 const TICK: Duration = Duration::from_millis(50);
@@ -132,29 +166,38 @@ impl Kernel {
         let mut playlist = Playlist::new();
         playlist.set_repeat(RepeatMode::All);
         let mut session: Option<Session> = None;
+        let mut single: Option<Single> = None;
         let mut playing = false;
         let mut paused = false;
-        // While true, the current item is a one-off preview (Show) rather
-        // than the playlist; when it finishes, playback stops.
-        let mut temp_title: Option<String> = None;
         let mut seq = 0u64;
 
         loop {
             while let Ok(cmd) = self.receiver.try_recv() {
                 match cmd {
                     Command::Play { display } => {
-                        temp_title = None;
+                        single = None;
                         playing = self.start(&playlist, &display, &mut session, &mut seq);
                         paused = false;
                     }
-                    Command::Show { path, display } => {
+                    Command::PlayItem {
+                        path,
+                        display,
+                        mode,
+                        seconds,
+                    } => {
                         let item = MediaItem::from_path(path);
-                        temp_title = Some(item.name.clone());
+                        single = Some(Single {
+                            path: item.path.clone(),
+                            title: item.name.clone(),
+                            index: playlist.position(&item.path),
+                            mode,
+                            seconds: seconds.max(1),
+                        });
                         playing = self.start_item(&item, &display, &mut session, &mut seq);
                         paused = false;
                     }
                     Command::Stop => {
-                        self.stop(&mut session, &mut playing, &mut paused, &mut temp_title)
+                        self.stop(&mut session, &mut playing, &mut paused, &mut single)
                     }
                     Command::Pause => {
                         paused = playing;
@@ -170,8 +213,8 @@ impl Kernel {
                     }
                     Command::Next => {
                         if playing {
-                            if temp_title.is_some() {
-                                self.finish_preview(&mut session, &mut playing, &mut temp_title);
+                            if single.is_some() {
+                                self.stop(&mut session, &mut playing, &mut paused, &mut single);
                             } else {
                                 let opened =
                                     self.step_forward(&mut playlist, &mut session, &mut seq);
@@ -182,7 +225,7 @@ impl Kernel {
                         }
                     }
                     Command::Prev => {
-                        if playing && temp_title.is_none() && playlist.current().is_some() {
+                        if playing && single.is_none() && playlist.current().is_some() {
                             playlist.prev();
                             let display = display_of(&session);
                             let opened = self.start(&playlist, &display, &mut session, &mut seq);
@@ -191,8 +234,8 @@ impl Kernel {
                     }
                     Command::SetPlaylist(items) => {
                         if items.is_empty() {
-                            self.stop(&mut session, &mut playing, &mut paused, &mut temp_title);
-                        } else if playing && temp_title.is_none() {
+                            self.stop(&mut session, &mut playing, &mut paused, &mut single);
+                        } else if playing && single.is_none() {
                             playlist.replace(items);
                             let display = display_of(&session);
                             playing = self.start(&playlist, &display, &mut session, &mut seq);
@@ -201,26 +244,55 @@ impl Kernel {
                         }
                     }
                 }
-                self.publish(&playlist, &session, playing, paused, &temp_title);
+                self.publish(&playlist, &session, playing, paused, &single);
             }
 
             if playing && !paused {
                 if let Some(active) = session.as_ref() {
                     let video_ended =
                         active.kind == MediaKind::Video && finished_rx.try_recv().is_ok();
-                    let image_due = active.kind == MediaKind::Image
+                    // Still images advance after the dwell period, except in
+                    // Loop/Timed modes where their clock is the mode itself.
+                    let dwell_due = active.kind == MediaKind::Image
+                        && single
+                            .as_ref()
+                            .is_none_or(|single| single.mode == PlayMode::Once)
                         && active.since.elapsed() >= *self.state.dwell.lock().unwrap();
+                    let timed_due = match single.as_ref() {
+                        Some(single) if single.mode == PlayMode::Timed => {
+                            active.since.elapsed() >= Duration::from_secs(single.seconds)
+                        }
+                        _ => false,
+                    };
 
-                    if video_ended || image_due {
-                        if temp_title.is_some() {
-                            self.finish_preview(&mut session, &mut playing, &mut temp_title);
-                        } else {
-                            let opened = self.step_forward(&mut playlist, &mut session, &mut seq);
-                            if !opened {
-                                playing = false;
+                    if timed_due {
+                        self.stop(&mut session, &mut playing, &mut paused, &mut single);
+                        self.publish(&playlist, &session, playing, paused, &single);
+                    } else if video_ended || dwell_due {
+                        match single.as_ref() {
+                            Some(active_single) if active_single.mode != PlayMode::Once => {
+                                // Loop / Timed: restart the item to fill the slot.
+                                let display = display_of(&session);
+                                let item = MediaItem::from_path(active_single.path.clone());
+                                let opened =
+                                    self.start_item(&item, &display, &mut session, &mut seq);
+                                if !opened {
+                                    playing = false;
+                                    self.stop(&mut session, &mut playing, &mut paused, &mut single);
+                                }
+                            }
+                            Some(_) => {
+                                self.stop(&mut session, &mut playing, &mut paused, &mut single)
+                            }
+                            None => {
+                                let opened =
+                                    self.step_forward(&mut playlist, &mut session, &mut seq);
+                                if !opened {
+                                    playing = false;
+                                }
                             }
                         }
-                        self.publish(&playlist, &session, playing, paused, &temp_title);
+                        self.publish(&playlist, &session, playing, paused, &single);
                     }
                 }
             }
@@ -296,29 +368,18 @@ impl Kernel {
         self.start(playlist, &display, session, seq)
     }
 
-    /// Closes a temporary preview and returns to idle.
-    fn finish_preview(
-        &self,
-        session: &mut Option<Session>,
-        playing: &mut bool,
-        temp_title: &mut Option<String>,
-    ) {
-        self.close_session(session);
-        *playing = false;
-        *temp_title = None;
-    }
-
+    /// Closes the active output and returns to idle.
     fn stop(
         &self,
         session: &mut Option<Session>,
         playing: &mut bool,
         paused: &mut bool,
-        temp_title: &mut Option<String>,
+        single: &mut Option<Single>,
     ) {
         self.close_session(session);
         *playing = false;
         *paused = false;
-        *temp_title = None;
+        *single = None;
     }
 
     fn close_session(&self, session: &mut Option<Session>) {
@@ -344,16 +405,20 @@ impl Kernel {
         session: &Option<Session>,
         playing: bool,
         paused: bool,
-        temp_title: &Option<String>,
+        single: &Option<Single>,
     ) {
         let last_error = self.state.snapshot.lock().unwrap().last_error.clone();
         let snapshot = Snapshot {
             playing,
             paused,
-            index: playlist.index(),
+            index: single
+                .as_ref()
+                .and_then(|active| active.index)
+                .unwrap_or_else(|| playlist.index()),
             total: playlist.len(),
-            title: temp_title
-                .clone()
+            title: single
+                .as_ref()
+                .map(|active| active.title.clone())
                 .or_else(|| playlist.current().map(|item| item.name.clone())),
             display: session.as_ref().map(|active| active.display.clone()),
             last_error,
@@ -369,4 +434,31 @@ fn display_of(session: &Option<Session>) -> String {
         .as_ref()
         .map(|active| active.display.clone())
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn play_mode_deserializes_from_ui_values() {
+        assert_eq!(
+            serde_json::from_str::<PlayMode>("\"once\"").unwrap(),
+            PlayMode::Once
+        );
+        assert_eq!(
+            serde_json::from_str::<PlayMode>("\"loop\"").unwrap(),
+            PlayMode::Loop
+        );
+        assert_eq!(
+            serde_json::from_str::<PlayMode>("\"timed\"").unwrap(),
+            PlayMode::Timed
+        );
+    }
+
+    #[test]
+    fn play_mode_rejects_unknown_values() {
+        assert!(serde_json::from_str::<PlayMode>("\"fast\"").is_err());
+        assert!(serde_json::from_str::<PlayMode>("\"\"").is_err());
+    }
 }
