@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>HDMI Media Controller</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="app">
+      <header class="header">
+        <h1>HDMI Media Controller</h1>
+        <p class="subtitle">Media playback for external displays</p>
+      </header>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Detected displays</h2>
+          <button id="refresh-btn" type="button">Refresh</button>
+        </div>
+        <div id="display-list" class="display-list" aria-live="polite"></div>
+        <p id="status" class="status">Loading&hellip;</p>
+      </section>
+
+      <footer class="footer">
+        <span>Display enumeration &middot; Windows</span>
+      </footer>
+    </main>
+    <script src="app.js" type="module"></script>
+  </body>
+</html>
