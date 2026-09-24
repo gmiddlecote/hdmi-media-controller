@@ -75,6 +75,8 @@ All checks must be clean before committing.
   listen to `displays-changed`, `scheduler-state`, `tauri://drag-drop`;
   backend-emitted to render windows: `output-control`, `overlay-text`;
   render windows emit `render-finished`, `media-progress`.
-- Release: `git tag vX.Y.Z && git push origin vX.Y.Z`. After a feature or
-  fix commit lands on `main`, tag a patch release and push it automatically
-  (no need to ask) so the Windows installer is rebuilt and published.
+- Release: after a feature or fix commit lands on `main`, bump `version` in
+  `src-tauri/Cargo.toml` (patch for fixes, minor for features), commit, push,
+  then `git tag vX.Y.Z && git push origin vX.Y.Z` — do this automatically (no
+  need to ask) so the Windows installer is rebuilt and published under a
+  version that matches the installer filenames and tag.
