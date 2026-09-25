@@ -63,6 +63,15 @@
         text-align: center;
         animation: media-fade 0.3s ease both;
       }
+      .audio-title {
+        font: 600 28px/1.4 system-ui, sans-serif;
+        color: #e2e8f0;
+        max-width: 80%;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        animation: media-fade 0.5s ease both;
+      }
     </style>
   </head>
   <body>
@@ -196,6 +205,32 @@
               document.addEventListener("click", function play() {
                 video.play().catch(function () {});
               });
+            } else if (payload.kind === "audio") {
+              const title = document.createElement("div");
+              title.className = "audio-title";
+              title.textContent = payload.title || "";
+              title.title = payload.title || "";
+              const audio = document.createElement("audio");
+              audio.autoplay = true;
+              audio.playsInline = true;
+              audio.preload = "auto";
+              audio.addEventListener("ended", function () {
+                event.emit("render-finished", {});
+              });
+              audio.addEventListener("timeupdate", function () {
+                if (!audio.duration || audio.duration === Infinity) return;
+                event.emit("media-progress", {
+                  current: audio.currentTime,
+                  duration: audio.duration,
+                });
+              });
+              audio.addEventListener("error", function () {
+                failWithDiagnostics("Audio could not be played: " + (payload.title || payload.mediaUrl), payload.mediaUrl);
+              });
+              audio.src = payload.mediaUrl;
+              stage.className = "";
+              stage.append(title, audio);
+              audio.play().catch(function () {});
             } else {
               const img = document.createElement("img");
               img.alt = "";
@@ -237,12 +272,12 @@
         });
 
         event.listen("output-control", function (evt) {
-          const video = stage.querySelector("video");
-          if (!video) return;
+          const media = stage.querySelector("video, audio");
+          if (!media) return;
           if (evt.payload === true) {
-            video.pause();
+            media.pause();
           } else {
-            video.play().catch(function () {});
+            media.play().catch(function () {});
           }
         });
       })();

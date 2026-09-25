@@ -4,7 +4,7 @@
 //! [`Playlist`] cursor, the currently open output window, pause state, and
 //! item timing. Display management stays on the calling threads — the
 //! kernel reacts to [`Command`]s pushed over a channel and to a
-//! `render-finished` event emitted by output windows when a video ends.
+//! `render-finished` event emitted by output windows when media ends.
 //!
 //! Images are swapped after a configurable dwell period; videos run until
 //! they finish. Playlist exhaustion follows [`RepeatMode`]: the kernel
@@ -44,7 +44,9 @@ pub enum PlayMode {
 #[derive(Debug)]
 pub enum Command {
     /// Start stepping through the playlist on the named display.
-    Play { display: String },
+    Play {
+        display: String,
+    },
     /// Play one specific item on the named display.
     PlayItem {
         path: String,
@@ -52,11 +54,19 @@ pub enum Command {
         mode: PlayMode,
         seconds: u64,
         fit: ObjectFit,
+        audio_device: String,
     },
     /// Stop playback and close the output window.
     Stop,
     /// Update the fit mode for an item (playlist + live output).
-    SetFit { path: String, fit: ObjectFit },
+    SetFit {
+        path: String,
+        fit: ObjectFit,
+    },
+    SetAudioDevice {
+        path: String,
+        audio_device: String,
+    },
     /// Pause advancing / video playback.
     Pause,
     /// Resume advancing / video playback.
@@ -84,7 +94,7 @@ pub struct Snapshot {
     pub elapsed_ms: u64,
     /// Milliseconds a still image stays up (`elapsedMs` reaches it before advance).
     pub dwell_ms: u64,
-    /// Video position, when the shown item is a video.
+    /// Position when the shown item is a video or audio file.
     pub progress: Option<VideoProgress>,
     pub display: Option<String>,
     pub last_error: Option<String>,
@@ -175,6 +185,7 @@ struct Single {
     seconds: u64,
     /// Fit mode applied whenever this item is (re)opened.
     fit: ObjectFit,
+    audio_device: String,
 }
 
 /// How long the kernel waits between decision ticks. Small enough for
@@ -241,9 +252,9 @@ impl Kernel {
                         mode,
                         seconds,
                         fit,
+                        audio_device,
                     } => {
-                        let mut item = MediaItem::from_path(path);
-                        item.fit = fit;
+                        let item = playback_item(path, fit, &audio_device);
                         single = Some(Single {
                             path: item.path.clone(),
                             title: item.name.clone(),
@@ -251,6 +262,7 @@ impl Kernel {
                             mode,
                             seconds: seconds.max(1),
                             fit,
+                            audio_device,
                         });
                         playing = self.start_item(&item, &display, &mut session, &mut seq);
                         paused = false;
@@ -266,6 +278,14 @@ impl Kernel {
                             if active.path == path {
                                 renderer::set_fit(&self.app, &active.label, fit);
                                 let _ = self.app.emit_to(&active.label, "fit-updated", fit);
+                            }
+                        }
+                    }
+                    Command::SetAudioDevice { path, audio_device } => {
+                        playlist.set_audio_device(&path, &audio_device);
+                        if let Some(active) = single.as_mut() {
+                            if active.path == path {
+                                active.audio_device = audio_device;
                             }
                         }
                     }
@@ -336,8 +356,8 @@ impl Kernel {
 
             if playing && !paused {
                 if let Some(active) = session.as_ref() {
-                    let video_ended =
-                        active.kind == MediaKind::Video && finished_rx.try_recv().is_ok();
+                    let media_ended = matches!(active.kind, MediaKind::Video | MediaKind::Audio)
+                        && finished_rx.try_recv().is_ok();
                     // Still images advance after the dwell period, except in
                     // Loop/Timed modes where their clock is the mode itself.
                     let dwell_due = active.kind == MediaKind::Image
@@ -355,13 +375,16 @@ impl Kernel {
                     if timed_due {
                         self.stop(&mut session, &mut playing, &mut paused, &mut single);
                         self.publish(&playlist, &session, playing, paused, &single, progress);
-                    } else if video_ended || dwell_due {
+                    } else if media_ended || dwell_due {
                         match single.as_ref() {
                             Some(active_single) if active_single.mode != PlayMode::Once => {
                                 // Loop / Timed: restart the item to fill the slot.
                                 let display = display_of(&session);
-                                let mut item = MediaItem::from_path(active_single.path.clone());
-                                item.fit = active_single.fit;
+                                let item = playback_item(
+                                    active_single.path.clone(),
+                                    active_single.fit,
+                                    &active_single.audio_device,
+                                );
                                 let opened =
                                     self.start_item(&item, &display, &mut session, &mut seq);
                                 if !opened {
@@ -437,6 +460,29 @@ impl Kernel {
     ) -> bool {
         self.close_session(session);
 
+        if item.kind == MediaKind::Audio {
+            *seq += 1;
+            let label = format!("audio-{seq}");
+            let overlay = self.state.overlay();
+            if !item.audio_device.is_empty() {
+                if let Err(err) = crate::audio::set_default_device(&item.audio_device) {
+                    self.set_error(err);
+                }
+            }
+            if let Err(err) = renderer::open_audio(&self.app, item, &label, &overlay) {
+                self.set_error(err.to_string());
+                return false;
+            }
+            *session = Some(Session {
+                label,
+                display: display.to_string(),
+                path: item.path.clone(),
+                kind: item.kind,
+                since: Instant::now(),
+            });
+            return true;
+        }
+
         let displays = crate::display::list_displays().unwrap_or_default();
         let Some(display_info) = displays.iter().find(|d| d.device_name == display).cloned() else {
             self.set_error(format!("Display {display} is no longer connected."));
@@ -495,7 +541,7 @@ impl Kernel {
         }
     }
 
-    /// Tells an output window to pause (`true`) or resume (`false`) video.
+    /// Tells an output window to pause (`true`) or resume (`false`) media.
     fn send_control(&self, label: &str, paused: bool) {
         let _ = self.app.emit_to(label, "output-control", paused);
     }
@@ -537,20 +583,29 @@ impl Kernel {
             dwell_ms: self.state.dwell.lock().unwrap().as_millis() as u64,
             progress: if playing
                 && !paused
-                && session
-                    .as_ref()
-                    .is_some_and(|active| active.kind == MediaKind::Video)
-            {
+                && session.as_ref().is_some_and(|active| {
+                    matches!(active.kind, MediaKind::Video | MediaKind::Audio)
+                }) {
                 progress
             } else {
                 None
             },
-            display: session.as_ref().map(|active| active.display.clone()),
+            display: session
+                .as_ref()
+                .filter(|active| active.kind != MediaKind::Audio)
+                .map(|active| active.display.clone()),
             last_error,
         };
         *self.state.snapshot.lock().unwrap() = snapshot.clone();
         let _ = self.app.emit("scheduler-state", snapshot);
     }
+}
+
+fn playback_item(path: String, fit: ObjectFit, audio_device: &str) -> MediaItem {
+    let mut item = MediaItem::from_path(path);
+    item.fit = fit;
+    item.audio_device = audio_device.to_string();
+    item
 }
 
 /// Display device name an active session is placed on, or empty.
@@ -585,6 +640,13 @@ mod tests {
     fn play_mode_rejects_unknown_values() {
         assert!(serde_json::from_str::<PlayMode>("\"fast\"").is_err());
         assert!(serde_json::from_str::<PlayMode>("\"\"").is_err());
+    }
+
+    #[test]
+    fn playback_item_keeps_per_item_output() {
+        let item = playback_item("/x/theme.mp3".into(), ObjectFit::Contain, "device-a");
+        assert_eq!(item.audio_device, "device-a");
+        assert_eq!(item.fit, ObjectFit::Contain);
     }
 
     #[test]

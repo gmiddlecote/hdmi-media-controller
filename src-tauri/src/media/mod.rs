@@ -1,4 +1,4 @@
-//! Media sources: local image and video files.
+//! Media sources: local image, video, and audio files.
 //!
 //! A [`MediaItem`] describes one playable file. The module also owns the
 //! `media://` scheme registry backing the renderer: every item that is
@@ -23,6 +23,7 @@ use crate::logging;
 pub enum MediaKind {
     Image,
     Video,
+    Audio,
 }
 
 /// How a media element fills the output display.
@@ -44,12 +45,13 @@ pub struct MediaItem {
     pub path: String,
     /// File name without the directory component.
     pub name: String,
-    /// Whether the file is an image or a video.
+    /// Whether the file is an image, video, or audio.
     pub kind: MediaKind,
     /// How the media fills the output display.
     pub fit: ObjectFit,
     /// Display the item prefers to play on; empty inherits the caller's display.
     pub display: String,
+    pub audio_device: String,
 }
 
 impl MediaItem {
@@ -67,6 +69,7 @@ impl MediaItem {
             kind,
             fit: ObjectFit::default(),
             display: String::new(),
+            audio_device: String::new(),
         }
     }
 }
@@ -77,6 +80,11 @@ pub const IMAGE_EXTS: &[&str] = &["jpg", "jpeg", "png", "gif", "webp", "bmp", "s
 /// File extensions treated as videos.
 pub const VIDEO_EXTS: &[&str] = &["mp4", "webm", "mov", "mkv", "avi", "ogv", "m4v"];
 
+/// File extensions treated as audio.
+pub const AUDIO_EXTS: &[&str] = &[
+    "mp3", "m4a", "aac", "wav", "flac", "ogg", "oga", "opus", "wma",
+];
+
 /// Recognizes an extension as playable media, or `None` for anything else.
 pub fn classify(path: &str) -> Option<MediaKind> {
     let ext = Path::new(path)
@@ -85,6 +93,7 @@ pub fn classify(path: &str) -> Option<MediaKind> {
     match ext.as_deref() {
         Some(ext) if IMAGE_EXTS.contains(&ext) => Some(MediaKind::Image),
         Some(ext) if VIDEO_EXTS.contains(&ext) => Some(MediaKind::Video),
+        Some(ext) if AUDIO_EXTS.contains(&ext) => Some(MediaKind::Audio),
         _ => None,
     }
 }
@@ -111,6 +120,14 @@ pub fn mime_for(kind: MediaKind, path: &str) -> String {
         (MediaKind::Video, "avi") => "video/x-msvideo".into(),
         (MediaKind::Video, "ogv") => "video/ogg".into(),
         (MediaKind::Video, _) => "video/mp4".into(),
+        (MediaKind::Audio, "mp3") => "audio/mpeg".into(),
+        (MediaKind::Audio, "m4a") => "audio/mp4".into(),
+        (MediaKind::Audio, "aac") => "audio/aac".into(),
+        (MediaKind::Audio, "wav") => "audio/wav".into(),
+        (MediaKind::Audio, "flac") => "audio/flac".into(),
+        (MediaKind::Audio, "ogg" | "oga" | "opus") => "audio/ogg".into(),
+        (MediaKind::Audio, "wma") => "audio/x-ms-wma".into(),
+        (MediaKind::Audio, _) => "audio/mpeg".into(),
         (MediaKind::Image, "jpg" | "jpeg") => "image/jpeg".into(),
         (MediaKind::Image, "png") => "image/png".into(),
         (MediaKind::Image, "gif") => "image/gif".into(),
@@ -353,6 +370,7 @@ pub fn probe(url: &str, registry: &Registry) -> MediaProbe {
     let kind = item.as_ref().map(|item| match item.kind {
         MediaKind::Image => "image",
         MediaKind::Video => "video",
+        MediaKind::Audio => "audio",
     });
     let mime = item.as_ref().map(|item| mime_for(item.kind, &item.path));
     MediaProbe {
@@ -386,6 +404,9 @@ mod tests {
         assert_eq!(kind_from_path("/x/a.mp4"), MediaKind::Video);
         assert_eq!(kind_from_path("/x/a.MKV"), MediaKind::Video);
         assert_eq!(kind_from_path("/x/a.webm"), MediaKind::Video);
+        assert_eq!(kind_from_path("/x/a.mp3"), MediaKind::Audio);
+        assert_eq!(kind_from_path("/x/a.WAV"), MediaKind::Audio);
+        assert_eq!(kind_from_path("/x/a.flac"), MediaKind::Audio);
         assert_eq!(kind_from_path("/x/a.bin"), MediaKind::Image);
     }
 
@@ -395,6 +416,9 @@ mod tests {
         assert_eq!(classify("/x/a.gif"), Some(MediaKind::Image));
         assert_eq!(classify("/x/a.mp4"), Some(MediaKind::Video));
         assert_eq!(classify("/x/a.MKV"), Some(MediaKind::Video));
+        assert_eq!(classify("/x/a.mp3"), Some(MediaKind::Audio));
+        assert_eq!(classify("/x/a.opus"), Some(MediaKind::Audio));
+        assert_eq!(classify("/x/a.ogg"), Some(MediaKind::Audio));
         assert_eq!(classify("/x/a.txt"), None);
         assert_eq!(classify("/x/no-ext"), None);
         assert_eq!(classify("/x/archive.gz"), None);
@@ -406,6 +430,10 @@ mod tests {
         assert_eq!(mime_for(MediaKind::Image, "a.png"), "image/png");
         assert_eq!(mime_for(MediaKind::Video, "a.mp4"), "video/mp4");
         assert_eq!(mime_for(MediaKind::Video, "a.webm"), "video/webm");
+        assert_eq!(mime_for(MediaKind::Audio, "a.mp3"), "audio/mpeg");
+        assert_eq!(mime_for(MediaKind::Audio, "a.wav"), "audio/wav");
+        assert_eq!(mime_for(MediaKind::Audio, "a.flac"), "audio/flac");
+        assert_eq!(mime_for(MediaKind::Audio, "a.ogg"), "audio/ogg");
     }
 
     #[test]
@@ -467,6 +495,9 @@ mod tests {
         assert_eq!(item.name, "logo.png");
         assert_eq!(item.kind, MediaKind::Image);
         assert_eq!(item.path, "/somewhere/logo.png");
+
+        let audio = MediaItem::from_path("/somewhere/theme.mp3");
+        assert_eq!(audio.audio_device, "");
     }
 
     #[test]

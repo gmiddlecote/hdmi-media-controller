@@ -2,6 +2,6 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "output",
   "description": "Permissions for fullscreen output render windows.",
-  "windows": ["output-*"],
+  "windows": ["output-*", "audio-*"],
   "permissions": ["core:default"]
 }

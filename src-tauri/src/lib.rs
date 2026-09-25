@@ -5,11 +5,13 @@
 //! can be developed in parallel:
 //!
 //! - [`display`] — enumerates and manages Windows displays.
-//! - [`media`] — loads and serves local image/video files.
+//! - [`audio`] — lists audio playback devices and picks the one used.
+//! - [`media`] — loads and serves local image/video/audio files.
 //! - [`playlist`] — ordered playback of media files.
 //! - [`scheduler`] — time- and event-based playback scheduling.
 //! - [`renderer`] — fullscreen/borderless output on the selected display.
 
+pub mod audio;
 pub mod display;
 pub mod logging;
 pub mod media;
@@ -74,6 +76,7 @@ enum EntryKind {
     Dir,
     Image,
     Video,
+    Audio,
     Other,
 }
 
@@ -99,6 +102,7 @@ fn list_directory(directory: String) -> Result<Vec<DirectoryEntry>, String> {
                 match media::classify(&path.to_string_lossy()) {
                     Some(media::MediaKind::Image) => EntryKind::Image,
                     Some(media::MediaKind::Video) => EntryKind::Video,
+                    Some(media::MediaKind::Audio) => EntryKind::Audio,
                     None => EntryKind::Other,
                 }
             };
@@ -129,6 +133,8 @@ struct PlaylistEntry {
     fit: ObjectFit,
     #[serde(default)]
     display: String,
+    #[serde(default)]
+    audio_device: String,
 }
 
 /// Replaces the playback queue from a list of file paths. Files that do not
@@ -145,6 +151,7 @@ fn scheduler_set_playlist(
                 let mut item = MediaItem::from_path(path.to_string_lossy().into_owned());
                 item.fit = entry.fit;
                 item.display = entry.display.clone();
+                item.audio_device = entry.audio_device.clone();
                 item
             })
         })
@@ -174,6 +181,7 @@ fn scheduler_play_item(
     mode: scheduler::PlayMode,
     seconds: u64,
     fit: ObjectFit,
+    audio_device: String,
 ) -> Result<(), String> {
     let canonical = media::canonical_path(Path::new(&path))
         .map(|path| path.to_string_lossy().into_owned())
@@ -184,6 +192,7 @@ fn scheduler_play_item(
         mode,
         seconds,
         fit,
+        audio_device,
     })
 }
 
@@ -196,6 +205,12 @@ fn media_register(app: tauri::AppHandle, path: String) -> Result<String, String>
         .ok_or_else(|| format!("File not found: {path}"))?;
     let item = MediaItem::from_path(canonical);
     Ok(app.state::<media::Registry>().register(item))
+}
+
+/// Lists audio playback devices for the per-item output selectors.
+#[tauri::command]
+fn list_audio_devices() -> Vec<audio::AudioDevice> {
+    audio::list_devices()
 }
 
 /// Returns diagnostics for a `media://` URL so a failing renderer can show
@@ -265,6 +280,21 @@ fn scheduler_set_fit(
     fit: ObjectFit,
 ) -> Result<(), String> {
     state.send(scheduler::Command::SetFit { path, fit })
+}
+
+#[tauri::command]
+fn scheduler_set_audio_device(
+    state: tauri::State<'_, scheduler::State>,
+    path: String,
+    audio_device: String,
+) -> Result<(), String> {
+    let canonical = media::canonical_path(Path::new(&path))
+        .map(|path| path.to_string_lossy().into_owned())
+        .ok_or_else(|| format!("File not found: {path}"))?;
+    state.send(scheduler::Command::SetAudioDevice {
+        path: canonical,
+        audio_device,
+    })
 }
 
 /// Returns the current playback status for the control UI.
@@ -367,7 +397,9 @@ pub fn run() {
             scheduler_set_dwell,
             scheduler_set_overlay,
             scheduler_set_fit,
+            scheduler_set_audio_device,
             scheduler_status,
+            list_audio_devices,
             renderer_render_token,
             renderer_close,
             renderer_close_all,
@@ -432,5 +464,15 @@ mod tests {
         std::fs::write(&file, "x").unwrap();
         assert!(list_directory(file.to_string_lossy().into_owned()).is_err());
         let _ = std::fs::remove_file(&file);
+    }
+
+    #[test]
+    fn playlist_entry_audio_device_defaults_and_deserializes() {
+        let legacy: PlaylistEntry = serde_json::from_str(r#"{"path":"theme.mp3"}"#).unwrap();
+        assert_eq!(legacy.audio_device, "");
+
+        let selected: PlaylistEntry =
+            serde_json::from_str(r#"{"path":"theme.mp3","audioDevice":"device-a"}"#).unwrap();
+        assert_eq!(selected.audio_device, "device-a");
     }
 }

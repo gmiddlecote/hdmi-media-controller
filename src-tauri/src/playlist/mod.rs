@@ -78,6 +78,14 @@ impl Playlist {
         }
     }
 
+    pub fn set_audio_device(&mut self, path: &str, audio_device: &str) {
+        for item in &mut self.items {
+            if item.path == path {
+                item.audio_device = audio_device.to_string();
+            }
+        }
+    }
+
     /// Appends a batch of items to the queue.
     pub fn extend(&mut self, items: Vec<MediaItem>) {
         if self.items.is_empty() {
@@ -241,5 +249,19 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["a.png", "b.png", "c.png"]
         );
+    }
+
+    #[test]
+    fn audio_device_updates_only_matching_items() {
+        let mut playlist = Playlist::new();
+        playlist.replace(vec![
+            MediaItem::from_path("/x/theme.mp3"),
+            MediaItem::from_path("/x/logo.png"),
+        ]);
+
+        playlist.set_audio_device("/x/theme.mp3", "device-a");
+
+        assert_eq!(playlist.items()[0].audio_device, "device-a");
+        assert_eq!(playlist.items()[1].audio_device, "");
     }
 }

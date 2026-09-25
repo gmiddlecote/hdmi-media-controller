@@ -385,6 +385,16 @@ button:disabled {
   flex-wrap: wrap;
 }
 
+.queued-actions .audio-item-select {
+  max-width: 220px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  padding: 4px 6px;
+  font-size: 12px;
+}
+
 .playback-row .mode-select {
   min-width: 180px;
 }

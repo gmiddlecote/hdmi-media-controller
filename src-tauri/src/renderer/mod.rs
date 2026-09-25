@@ -31,7 +31,7 @@ pub struct RenderSession {
 pub struct RenderPayload {
     /// `media://<id>` URL to load.
     pub media_url: String,
-    /// `image` or `video` — decides which element `render.html` creates.
+    /// Media kind — decides which element `render.html` creates.
     pub kind: MediaKind,
     /// Friendly title shown as the window title and element fallback text.
     pub title: String,
@@ -157,6 +157,62 @@ pub fn open(
     };
 
     let _ = window.set_fullscreen(true);
+
+    Ok(())
+}
+
+/// Opens an invisible output window that plays `item` as sound only.
+///
+/// Audio never appears on any display: the window is hidden, has no
+/// decorations, skips the taskbar, and sits far off-screen. The webview still
+/// decodes the file and emits `render-finished`/`media-progress`, which the
+/// scheduler uses to advance and time the item.
+pub fn open_audio(
+    app: &AppHandle,
+    item: &MediaItem,
+    label: &str,
+    overlay: &str,
+) -> Result<(), RendererError> {
+    let media_url = app.state::<Registry>().register(item.clone());
+
+    let payload = RenderPayload {
+        media_url: media_url.clone(),
+        kind: item.kind,
+        title: item.name.clone(),
+        overlay: overlay.to_string(),
+        fit: item.fit,
+    };
+    app.state::<RendererState>()
+        .0
+        .lock()
+        .unwrap()
+        .insert(label.to_string(), RenderSession { payload });
+
+    let window = match WebviewWindowBuilder::new(
+        app,
+        label.to_string(),
+        WebviewUrl::App("render.html".into()),
+    )
+    .title(format!("Audio \u{2014} {}", item.name))
+    .decorations(false)
+    .resizable(false)
+    .visible(false)
+    .skip_taskbar(true)
+    .additional_browser_args(
+        "--autoplay-policy=no-user-gesture-required --disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection",
+    )
+    .position(-32000.0, -32000.0)
+    .inner_size(1.0, 1.0)
+    .build()
+    {
+        Ok(window) => window,
+        Err(err) => {
+            app.state::<RendererState>().0.lock().unwrap().remove(label);
+            return Err(RendererError::Creation(err.to_string()));
+        }
+    };
+
+    let _ = window.set_fullscreen(false);
 
     Ok(())
 }

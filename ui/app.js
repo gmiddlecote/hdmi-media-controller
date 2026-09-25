@@ -203,8 +203,29 @@ const playbackStatus = document.getElementById("playback-status");
 let queuedPaths = [];
 let displays = [];
 
+let audioDevices = [];
+
+function loadAudioDevices() {
+  invoke("list_audio_devices")
+    .then((devices) => {
+      audioDevices = devices;
+      renderQueue();
+    })
+    .catch(() => {
+      audioDevices = [];
+      renderQueue();
+    });
+}
+
+loadAudioDevices();
+
 function queueEntry(path) {
-  return { path, fit: "cover", display: outputDisplay.value || "" };
+  return {
+    path,
+    fit: "cover",
+    display: outputDisplay.value || "",
+    audioDevice: "",
+  };
 }
 
 function syncOutputSelect(displays) {
@@ -230,9 +251,12 @@ function syncOutputSelect(displays) {
 }
 
 const VIDEO_RE = /\.(mp4|webm|mov|mkv|avi|ogv|m4v)$/i;
+const AUDIO_RE = /\.(mp3|m4a|aac|wav|flac|ogg|oga|opus|wma)$/i;
 
 function mediaKind(path) {
-  return VIDEO_RE.test(path) ? "video" : "image";
+  if (VIDEO_RE.test(path)) return "video";
+  if (AUDIO_RE.test(path)) return "audio";
+  return "image";
 }
 
 /// Starts one specific queued item with the chosen mode on its monitor (or
@@ -246,6 +270,7 @@ async function playItem(path, mode, seconds) {
     return;
   }
   const fit = entry ? entry.fit : "cover";
+  const audioDevice = entry ? entry.audioDevice : "";
   try {
     await invoke("scheduler_play_item", {
       path,
@@ -253,6 +278,7 @@ async function playItem(path, mode, seconds) {
       mode,
       seconds: seconds > 0 ? seconds : 5,
       fit,
+      audioDevice,
     });
   } catch (error) {
     playbackStatus.textContent = `Could not play: ${String(error)}`;
@@ -284,7 +310,8 @@ function renderQueue() {
 
     const loadThumb = (url) => {
       const showBadge = () => kindBadge.remove();
-      if (mediaKind(path) === "video") {
+      const kind = mediaKind(path);
+      if (kind === "video") {
         const video = el("video", "thumb");
         video.muted = true;
         video.playsInline = true;
@@ -293,7 +320,7 @@ function renderQueue() {
         video.addEventListener("error", () => video.remove());
         video.src = url;
         media.append(video);
-      } else {
+      } else if (kind === "image") {
         const img = el("img", "thumb");
         img.alt = "";
         img.addEventListener("load", showBadge);
@@ -372,14 +399,60 @@ function renderQueue() {
       pushPlaylist();
     });
 
-    actions.append(once, loop, seconds, timed, fit, monitor, remove);
+    let audioOutput = null;
+    if (mediaKind(path) === "audio") {
+      if (
+        queued.audioDevice &&
+        !audioDevices.some((device) => device.id === queued.audioDevice)
+      ) {
+        queued.audioDevice = "";
+      }
+      audioOutput = el("select", "audio-item-select");
+      audioOutput.title = "Audio output for this item";
+      audioOutput.setAttribute("aria-label", `Audio output for ${name}`);
+      audioOutput.addEventListener("click", (event) => event.stopPropagation());
+      const systemDefault = el("option", "", "Current system default");
+      systemDefault.value = "";
+      audioOutput.append(systemDefault);
+      audioDevices.forEach((device) => {
+        const option = el("option", "", device.name);
+        option.value = device.id;
+        audioOutput.append(option);
+      });
+      audioOutput.value = queued.audioDevice;
+      audioOutput.disabled = audioDevices.length === 0;
+      audioOutput.addEventListener("change", async () => {
+        const previous = queued.audioDevice;
+        queued.audioDevice = audioOutput.value;
+        try {
+          await invoke("scheduler_set_audio_device", {
+            path,
+            audioDevice: queued.audioDevice,
+          });
+          const selected = audioDevices.find(
+            (device) => device.id === queued.audioDevice
+          );
+          playbackStatus.textContent = selected
+            ? `Audio output saved for this item: ${selected.name}.`
+            : "This item will use the current system audio output.";
+        } catch (error) {
+          queued.audioDevice = previous;
+          audioOutput.value = previous;
+          playbackStatus.textContent = `Could not set audio output: ${String(error)}`;
+        }
+      });
+    }
+
+    actions.append(once, loop, seconds, timed, fit, monitor);
+    if (audioOutput) actions.append(audioOutput);
+    actions.append(remove);
     body.append(nameEl, actions);
     item.append(media, body);
     queueEl.append(item);
   });
   dropzoneHint.textContent =
     queuedPaths.length === 0
-      ? "Drop image or video files here to build the playlist"
+      ? "Drop image, video, or audio files here to build the playlist"
       : `${queuedPaths.length} file(s) queued. Drop more to add them.`;
 }
 
@@ -401,6 +474,7 @@ async function pushPlaylist() {
         path: queued.path,
         fit: queued.fit,
         display: queued.display,
+        audioDevice: queued.audioDevice,
       })),
     });
     if (accepted < queuedPaths.length) {
@@ -476,8 +550,13 @@ function updateNowPlaying(snapshot) {
     invoke("media_register", { path: snapshot.path })
       .then((url) => {
         if (nowPlayingPath !== snapshot.path) return;
+        const kind = mediaKind(snapshot.path);
+        if (kind === "audio") {
+          npThumb.replaceChildren();
+          return;
+        }
         const thumb =
-          mediaKind(snapshot.path) === "video"
+          kind === "video"
             ? Object.assign(document.createElement("video"), {
                 muted: true,
                 playsInline: true,

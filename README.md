@@ -2,8 +2,8 @@
 
 A Windows desktop application (Rust + [Tauri 2](https://tauri.app)) for
 controlling media playback on external HDMI-connected displays: pick an
-output display, pick its resolution, and show local images/videos
-fullscreen on it while the control UI stays on the laptop display.
+output display, pick its resolution, and play local images, videos, or audio
+while the control UI stays on the laptop display.
 
 ## Current status
 
@@ -19,7 +19,7 @@ fullscreen on it while the control UI stays on the laptop display.
   automatically.
 - Fullscreen, borderless **renderer windows** positioned on the chosen
   display (`renderer` module).
-- **Local media loading**: image/video files added by drag-and-drop or by
+- **Local media loading**: image/video/audio files added by drag-and-drop or by
   path, served to renderers over a custom `media://` scheme with byte-range
   support (`media` module).
 - **Playlists and scheduled playback**: a background scheduler kernel
@@ -27,7 +27,7 @@ fullscreen on it while the control UI stays on the laptop display.
   drives render windows (`playlist` + `scheduler` modules).
 - **Per-item controls**: every queued item shows a live thumbnail and can be
   played once, looped, or shown for a selected number of seconds on the
-  chosen output.
+  chosen output. Audio items have their own playback-device selector.
 - **In-app file browser**: browse folders on disk and add files without
   drag-and-drop (`list_directory` command).
 - **Playback progress**: the control UI shows the current item's thumbnail
@@ -53,6 +53,7 @@ fullscreen on it while the control UI stays on the laptop display.
     └── src/
         ├── main.rs             Binary entry point
         ├── lib.rs              Tauri builder + IPC commands + hotplug watcher
+        ├── audio.rs            Windows playback-device enumeration/selection
         ├── display/            Display management
         │   ├── mod.rs          Public API (list/modes/set, DisplayError)
         │   ├── model.rs        DisplayInfo, DisplayBounds, DisplayMode, connector labels
@@ -75,12 +76,15 @@ playback, scheduling, and output rendering can be developed independently.
 | Command                 | Returns                | Purpose                                       |
 | ----------------------- | ---------------------- | --------------------------------------------- |
 | `list_displays`         | `Vec<DisplayInfo>`     | Detected displays + connector type + bounds   |
-| `list_directory`        | `Vec<DirectoryEntry>`  | Browse a folder; entries = dir/image/video/other |
+| `list_directory`        | `Vec<DirectoryEntry>`  | Browse a folder; entries = dir/image/video/audio/other |
 | `get_display_modes`     | `DisplayModes`         | Current mode + supported modes                |
 | `set_display_mode`      | `()`                   | Apply a resolution to a display               |
 | `scheduler_set_playlist`| `usize`                | Replace the playlist (`paths`); returns count |
 | `scheduler_play`        | `()`                   | Start stepping the playlist on a display      |
 | `scheduler_play_item`   | `()`                   | Play one item: `mode` = `once`/`loop`/`timed`, `seconds` for timed |
+| `scheduler_set_fit`     | `()`                   | Set one queued item's fit mode                 |
+| `scheduler_set_audio_device` | `()`              | Set one audio item's output device            |
+| `list_audio_devices`    | `Vec<AudioDevice>`     | Available Windows playback devices            |
 | `media_register`        | `media://<id>` url     | Register a file; used for live thumbnails     |
 | `scheduler_pause`       | `()`                   | Pause the currently playing video             |
 | `scheduler_resume`      | `()`                   | Resume the paused video                       |
@@ -104,10 +108,10 @@ re-enumerates (which refreshes the output-display selector too).
   playback state changes (playing/paused, current item, dwell/video
   progress, last error).
 - `output-control` — sent by the scheduler to a render window: `true` =
-  pause, `false` = resume the video.
-- `render-finished` — emitted by `render.html` when a video ends; the
-  scheduler advances to the next item.
-- `media-progress` — emitted by `render.html` while a video plays (`current`
+  pause, `false` = resume the media.
+- `render-finished` — emitted by `render.html` when a video or audio file
+  ends; the scheduler advances to the next item.
+- `media-progress` — emitted by `render.html` while media plays (`current`
   and `duration` in seconds); the scheduler forwards it into `scheduler-state`.
 - `overlay-text` — sent by `set_overlay` to every open render window so the
   caption updates live.
@@ -122,19 +126,20 @@ three ways:
 1. **Drag-and-drop** — the window receives the built-in `tauri://drag-drop`
    event with absolute file paths.
 2. **File browser** — the in-app browser lists a folder (dirs first, then
-   images/videos), navigates up/in, and queues files with one click.
+   images/videos/audio), navigates up/in, and queues files with one click.
 3. **Manual path** — paste a path into the text field and press Add.
 
 On set, the backend resolves each path to canonical form and records a
-`MediaItem` (`path`, basename, `image`/`video` kind). The queue shows a live
-thumbnail per item (the webview decodes the file straight from the
-`media://` url) plus three play choices: **Once** (play to the end, then
-stop), **Loop** (play continuously until stopped), and **Secs** (show for a
-selectable number of seconds). Clicking a thumbnail or its name plays the
-item once on the selected output. The scheduler opens a renderer window on
-the target display, and `render.html` asks for a `media://<id>` URL via
-`renderer_render_token`. The `media://` protocol handler streams the file
-bytes with `Accept-Ranges`/`Range` support so long videos seek correctly.
+`MediaItem` (`path`, basename, media kind, fit, display, and optional audio
+output). The queue shows a live thumbnail per visual item plus three play
+choices: **Once** (play to the end, then stop), **Loop** (play continuously
+until stopped), and **Secs** (show for a selectable number of seconds).
+Audio items also show a playback-device selector next to their controls.
+Clicking a thumbnail or name plays the item once on the selected output. The
+scheduler opens a renderer window on the target display, and `render.html`
+asks for a `media://<id>` URL via `renderer_render_token`. The `media://`
+protocol handler streams the file bytes with `Accept-Ranges`/`Range` support
+so long videos seek correctly.
 CSP grants the renderer `img-src`/`media-src` access to the `media:` scheme.
 Registry entries are kept for the whole session (deduplicated by path), so
 thumbnails never 404 when outputs close.
@@ -146,8 +151,11 @@ A kernel thread polls a command channel every 50 ms and also listens for
 
 - Images dwell for the configured duration (default 5 s, settable in the
   UI) then advance automatically.
-- Videos play to the end and advance on the `render-finished` event.
-- Pause/resume applies to the active video window via `output-control`.
+- Videos and audio files play to the end and advance on the
+  `render-finished` event.
+- Each audio item's selected Windows playback endpoint is applied before it
+  starts; audio plays in a hidden renderer window with no visual output.
+- Pause/resume applies to the active media window via `output-control`.
 - Single items (queue clicks) can run in `once`, `loop`, or `timed` mode —
   `loop` restarts the item on finish, `timed` shows it for the requested
   seconds (videos loop inside the slot if they end early, and cut off if
@@ -250,6 +258,6 @@ cargo test
 - [x] Display hotplug detection (re-enumerate on connect/disconnect via a
       polling watcher that emits `displays-changed`).
 - [x] Per-display fullscreen/borderless output windows (renderer).
-- [x] Load local image and video files (drag-and-drop + manual path + `media://`).
+- [x] Load local image, video, and audio files (drag-and-drop + manual path + `media://`).
 - [x] Playlists and scheduled playback (images dwell, videos auto-advance, pause/resume).
 - [x] Windows installer pipeline (MSI/NSIS via GitHub Actions).
