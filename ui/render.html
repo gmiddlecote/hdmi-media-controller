@@ -168,6 +168,16 @@
           }
         }
 
+        // Applies the shared output volume to a freshly created media element.
+        function applyVolume(media) {
+          core
+            .invoke("renderer_volume")
+            .then(function (level) {
+              media.volume = level;
+            })
+            .catch(function () {});
+        }
+
         // Last resort for an orphaned output window: close it from the webview.
         function closeSelf() {
           try {
@@ -204,6 +214,7 @@
               stage.className = "media";
               stage.append(video);
               applyFit(payload.fit);
+              applyVolume(video);
               video.play().catch(function () {});
 
               // Fallback: if the webview still blocks autoplay with sound, start on
@@ -236,6 +247,7 @@
               audio.src = payload.mediaUrl;
               stage.className = "";
               stage.append(title, audio);
+              applyVolume(audio);
               audio.play().catch(function () {});
             } else {
               const img = document.createElement("img");
@@ -271,6 +283,11 @@
 
         event.listen("overlay-text", function (evt) {
           setOverlay(evt.payload);
+        });
+
+        event.listen("output-volume", function (evt) {
+          const media = stage.querySelector("video, audio");
+          if (media) media.volume = Number(evt.payload);
         });
 
         event.listen("fit-updated", function (evt) {

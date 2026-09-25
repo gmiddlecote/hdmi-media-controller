@@ -61,6 +61,29 @@ impl RendererState {
     }
 }
 
+/// Playback volume shared by every output window, from 0.0 (silent) to 1.0
+/// (full). Managed apart from [`RendererState`] so it survives windows
+/// opening and closing.
+pub struct Volume(Mutex<f32>);
+
+impl Default for Volume {
+    fn default() -> Self {
+        Self(Mutex::new(1.0))
+    }
+}
+
+impl Volume {
+    /// The level output windows should play at.
+    pub fn get(&self) -> f32 {
+        *self.0.lock().unwrap()
+    }
+
+    /// Stores a new level, clamped to 0.0–1.0.
+    pub fn set(&self, level: f32) {
+        *self.0.lock().unwrap() = level.clamp(0.0, 1.0);
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PreviewPayload {
