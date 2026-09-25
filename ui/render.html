@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>HDMI Media Output</title>
+    <title>DuetPlay Output</title>
     <style>
       html,
       body {
@@ -109,6 +109,12 @@
         var core = window.__TAURI__.core;
         var event = window.__TAURI__.event;
 
+        document.addEventListener("keydown", function (keyEvent) {
+          if (keyEvent.key !== "Escape" || keyEvent.repeat) return;
+          keyEvent.preventDefault();
+          core.invoke("scheduler_stop").catch(function () {});
+        });
+
         var label;
         try {
           label = window.__TAURI__.window.getCurrentWindow().label;
@@ -173,7 +179,7 @@
           .invoke("renderer_render_token", { label })
           .then(function (payload) {
             stage.textContent = "";
-            document.title = "HDMI Media Output \u2014 " + (payload.title || "");
+            document.title = "DuetPlay Output \u2014 " + (payload.title || "");
             setOverlay(payload.overlay || "");
 
             if (payload.kind === "video") {

@@ -1,4 +1,4 @@
-// Control UI for the HDMI Media Controller.
+// Control UI for DuetPlay.
 //
 // Talks to the Rust backend over Tauri IPC. `window.__TAURI__` is provided
 // by the `app.withGlobalTauri` setting in tauri.conf.json, so no bundler or
@@ -9,6 +9,12 @@
 
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
+
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape" || event.repeat) return;
+  event.preventDefault();
+  invoke("scheduler_stop").catch(() => {});
+});
 
 const refreshBtn = document.getElementById("refresh-btn");
 const listEl = document.getElementById("display-list");
@@ -718,4 +724,5 @@ overlayInput.addEventListener("keydown", (event) => {
   } catch (error) {
     playbackStatus.textContent = `Could not read playback state: ${String(error)}`;
   }
+  await invoke("app_ready").catch(() => {});
 })();

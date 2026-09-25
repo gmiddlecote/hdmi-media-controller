@@ -1,4 +1,4 @@
-# HDMI Media Controller
+# DuetPlay
 
 A Windows desktop application (Rust + [Tauri 2](https://tauri.app)) for
 controlling media playback on external HDMI-connected displays: pick an

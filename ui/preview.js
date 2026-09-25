@@ -93,7 +93,7 @@ async function loadPayload(payload) {
   if (!payload || !payload.mediaUrl) return;
   hasMedia = true;
   title.textContent = payload.title || "Video preview";
-  document.title = `Video Preview — ${payload.title || "Clip"}`;
+  document.title = `DuetPlay Video Preview — ${payload.title || "Clip"}`;
   subtitle.textContent = sinkReady
     ? "Preview audio is routed to the selected laptop speaker."
     : "Choose the laptop speaker to enable preview audio.";

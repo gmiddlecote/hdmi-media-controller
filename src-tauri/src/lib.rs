@@ -1,4 +1,4 @@
-//! HDMI Media Controller — backend entry point.
+//! DuetPlay — backend entry point.
 //!
 //! The application is split into independent modules so that display
 //! management, media playback, playlists, scheduling, and output rendering
@@ -239,6 +239,17 @@ fn renderer_close_preview(app: tauri::AppHandle) -> Result<(), String> {
     }
 }
 
+#[tauri::command]
+fn app_ready(app: tauri::AppHandle) {
+    if let Some(splash) = app.get_webview_window("splash") {
+        let _ = splash.close();
+    }
+    if let Some(main) = app.get_webview_window("main") {
+        let _ = main.show();
+        let _ = main.set_focus();
+    }
+}
+
 /// Lists audio playback devices for the per-item output selectors.
 #[tauri::command]
 fn list_audio_devices() -> Vec<audio::AudioDevice> {
@@ -421,6 +432,7 @@ pub fn run() {
             scheduler_play_item,
             media_register,
             media_probe,
+            app_ready,
             log_js_error,
             scheduler_stop,
             scheduler_pause,
