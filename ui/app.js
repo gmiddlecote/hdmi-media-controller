@@ -198,6 +198,7 @@ const resumeBtn = document.getElementById("resume-btn");
 const prevBtn = document.getElementById("prev-btn");
 const nextBtn = document.getElementById("next-btn");
 const stopBtn = document.getElementById("stop-btn");
+const previewBtn = document.getElementById("preview-btn");
 const playbackStatus = document.getElementById("playback-status");
 
 let queuedPaths = [];
@@ -282,6 +283,15 @@ async function playItem(path, mode, seconds) {
     });
   } catch (error) {
     playbackStatus.textContent = `Could not play: ${String(error)}`;
+  }
+}
+
+async function openPreview(path) {
+  try {
+    await invoke("renderer_open_preview", { path });
+    playbackStatus.textContent = "Video preview opened.";
+  } catch (error) {
+    playbackStatus.textContent = `Could not open video preview: ${String(error)}`;
   }
 }
 
@@ -424,6 +434,12 @@ function renderQueue() {
     down.disabled = index === queuedPaths.length - 1;
     down.addEventListener("click", () => moveQueuedItem(index, 1));
 
+    const preview = mediaKind(path) === "video" ? el("button", "action", "Preview") : null;
+    if (preview) {
+      preview.title = "Open this video in the dedicated preview window";
+      preview.addEventListener("click", () => openPreview(path));
+    }
+
     let audioOutput = null;
     if (mediaKind(path) === "audio") {
       if (
@@ -470,6 +486,7 @@ function renderQueue() {
 
     actions.append(once, loop, seconds, timed, fit, monitor, up, down);
     if (audioOutput) actions.append(audioOutput);
+    if (preview) actions.append(preview);
     actions.append(remove);
     body.append(nameEl, actions);
     item.append(media, body);
@@ -532,6 +549,8 @@ function updateSnapshot(snapshot) {
 
   playBtn.disabled = snapshot.playing || !snapshot.total;
   stopBtn.disabled = !snapshot.playing;
+  previewBtn.disabled =
+    !snapshot.playing || !snapshot.path || mediaKind(snapshot.path) !== "video";
   pauseBtn.disabled = !snapshot.playing || snapshot.paused;
   resumeBtn.disabled = !snapshot.playing || !snapshot.paused;
 
@@ -681,6 +700,9 @@ overlayInput.addEventListener("keydown", (event) => {
     }
   });
 
+  previewBtn.addEventListener("click", () => {
+    if (lastSnapshot && lastSnapshot.path) openPreview(lastSnapshot.path);
+  });
   pauseBtn.addEventListener("click", () => invoke("scheduler_pause").catch(() => {}));
   resumeBtn.addEventListener("click", () => invoke("scheduler_resume").catch(() => {}));
   prevBtn.addEventListener("click", () => invoke("scheduler_prev").catch(() => {}));

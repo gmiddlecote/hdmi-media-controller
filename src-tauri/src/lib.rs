@@ -23,7 +23,7 @@ use std::fs;
 use std::path::Path;
 
 use display::model::{DisplayInfo, DisplayMode, DisplayModes};
-use media::{MediaItem, ObjectFit};
+use media::{MediaItem, MediaKind, ObjectFit};
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Manager};
 
@@ -207,6 +207,38 @@ fn media_register(app: tauri::AppHandle, path: String) -> Result<String, String>
     Ok(app.state::<media::Registry>().register(item))
 }
 
+#[tauri::command]
+async fn renderer_open_preview(app: tauri::AppHandle, path: String) -> Result<(), String> {
+    let canonical = media::canonical_path(Path::new(&path))
+        .map(|path| path.to_string_lossy().into_owned())
+        .ok_or_else(|| format!("File not found: {path}"))?;
+    let item = MediaItem::from_path(canonical);
+    if item.kind != MediaKind::Video {
+        return Err("Only video files can be opened in the preview window.".into());
+    }
+
+    tauri::async_runtime::spawn_blocking(move || renderer::open_preview(&app, &item))
+        .await
+        .map_err(|error| format!("Preview worker failed: {error}"))?
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn renderer_preview_token(app: tauri::AppHandle) -> Result<renderer::PreviewPayload, String> {
+    app.state::<renderer::PreviewState>()
+        .payload()
+        .ok_or_else(|| "No video is selected for preview.".into())
+}
+
+#[tauri::command]
+fn renderer_close_preview(app: tauri::AppHandle) -> Result<(), String> {
+    if renderer::close_preview(&app) {
+        Ok(())
+    } else {
+        Err("No preview window is open.".into())
+    }
+}
+
 /// Lists audio playback devices for the per-item output selectors.
 #[tauri::command]
 fn list_audio_devices() -> Vec<audio::AudioDevice> {
@@ -370,6 +402,7 @@ pub fn run() {
     let result = tauri::Builder::default()
         .manage(media::Registry::default())
         .manage(renderer::RendererState::default())
+        .manage(renderer::PreviewState::default())
         .manage(scheduler_state.clone())
         .setup(move |app| -> Result<(), Box<dyn std::error::Error>> {
             #[cfg(target_os = "windows")]
@@ -401,6 +434,9 @@ pub fn run() {
             scheduler_status,
             list_audio_devices,
             renderer_render_token,
+            renderer_open_preview,
+            renderer_preview_token,
+            renderer_close_preview,
             renderer_close,
             renderer_close_all,
         ])

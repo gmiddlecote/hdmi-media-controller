@@ -28,7 +28,7 @@ body {
 }
 
 .app {
-  max-width: 860px;
+  max-width: 1200px;
   margin: 0 auto;
   padding: 32px 24px 16px;
   display: flex;
@@ -248,7 +248,7 @@ button:disabled {
   list-style: none;
   margin: 0 0 12px;
   padding: 0;
-  max-height: 300px;
+  max-height: 360px;
   overflow-y: auto;
 }
 
@@ -307,16 +307,17 @@ button:disabled {
 .queued-body {
   flex: 1;
   min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  justify-content: center;
+  display: grid;
+  grid-template-columns: minmax(120px, 180px) minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
 }
 
 .queued-name {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  min-width: 0;
   cursor: pointer;
 }
 
@@ -325,10 +326,13 @@ button:disabled {
 }
 
 .queued-actions {
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: 6px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  padding-bottom: 2px;
 }
 
 .queued-actions .action {
@@ -366,7 +370,7 @@ button:disabled {
 }
 
 .queued-remove {
-  margin-left: auto;
+  margin-left: 0;
   border: none;
   color: var(--muted);
   font-size: 12px;
@@ -382,7 +386,9 @@ button:disabled {
   display: flex;
   align-items: center;
   gap: 8px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  padding-bottom: 2px;
 }
 
 .queued-actions .audio-item-select {
@@ -419,6 +425,7 @@ button:disabled {
 
 .now-playing {
   display: flex;
+  flex-wrap: nowrap;
   gap: 12px;
   align-items: center;
   background: var(--bg);
@@ -450,6 +457,11 @@ button:disabled {
   width: 100%;
   height: 100%;
   object-fit: cover;
+}
+
+.preview-btn {
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .np-info {

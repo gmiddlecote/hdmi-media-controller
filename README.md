@@ -26,8 +26,11 @@ while the control UI stays on the laptop display.
   advances the playlist, dwells on images, pauses/resumes on demand, and
   drives render windows (`playlist` + `scheduler` modules).
 - **Per-item controls**: every queued item shows a live thumbnail and can be
-  played once, looped, shown for a selected number of seconds, or moved up and
-  down in the playlist. Audio items have their own playback-device selector.
+  played once, looped, shown for a selected number of seconds, moved up and
+  down in the playlist, or opened in the dedicated video preview window. Audio
+  items have their own playback-device selector.
+- **Local-speaker video preview**: the preview window is independent of HDMI
+  playback and lets the user choose the local audio output before playback.
 - **In-app file browser**: browse folders on disk and add files without
   drag-and-drop (`list_directory` command).
 - **Playback progress**: the control UI shows the current item's thumbnail
@@ -43,8 +46,10 @@ while the control UI stays on the laptop display.
 ├── ui/                         Static control UI (no npm/bundler needed)
 │   ├── index.html             Control + playback UI
 │   ├── render.html           Fullscreen output page used by renderer windows
+│   ├── preview.html          Dedicated local video preview page
 │   ├── styles.css
-│   └── app.js                  Tauri IPC + event handling
+│   ├── app.js                  Tauri IPC + event handling
+│   └── preview.js              Preview media + local audio selection
 └── src-tauri/                  Rust backend
     ├── Cargo.toml
     ├── tauri.conf.json
@@ -95,6 +100,9 @@ playback, scheduling, and output rendering can be developed independently.
 | `scheduler_set_overlay` | `()`                   | Set the output caption (`text`; empty clears) |
 | `scheduler_status`      | `Snapshot`             | Current playback state (polled)               |
 | `renderer_render_token` | `RenderPayload`        | `media://` URL + kind + title + overlay for render.html |
+| `renderer_open_preview` | `()`                   | Open or update the dedicated local video preview |
+| `renderer_preview_token` | `PreviewPayload`      | `media://` URL + title for preview.html |
+| `renderer_close_preview` | `()`                  | Close the dedicated video preview window |
 | `renderer_close_all`    | `usize`                | Close all renderer windows                    |
 
 Structures are serialized to camelCase JSON. The backend also runs a
@@ -115,6 +123,8 @@ re-enumerates (which refreshes the output-display selector too).
   and `duration` in seconds); the scheduler forwards it into `scheduler-state`.
 - `overlay-text` — sent by `set_overlay` to every open render window so the
   caption updates live.
+- `preview-media` — sent to the dedicated preview window when a different
+  video is selected.
 - `tauri://drag-drop` — built-in Tauri event carrying `paths` when files are
   dropped on a window; the UI adds them to the playlist.
 

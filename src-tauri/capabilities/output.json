@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "output",
-  "description": "Permissions for fullscreen output render windows.",
-  "windows": ["output-*", "audio-*"],
+  "description": "Permissions for output and preview render windows.",
+  "windows": ["output-*", "audio-*", "preview"],
   "permissions": ["core:default"]
 }

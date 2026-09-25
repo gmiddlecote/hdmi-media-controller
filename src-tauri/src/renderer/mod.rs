@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 
 use serde::Serialize;
-use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 
 use crate::media::{self, MediaItem, MediaKind, ObjectFit, Registry};
 
@@ -60,6 +60,32 @@ impl RendererState {
         self.0.lock().unwrap().keys().cloned().collect()
     }
 }
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreviewPayload {
+    pub media_url: String,
+    pub title: String,
+}
+
+#[derive(Default)]
+pub struct PreviewState(Mutex<Option<PreviewPayload>>);
+
+impl PreviewState {
+    fn set(&self, payload: PreviewPayload) {
+        *self.0.lock().unwrap() = Some(payload);
+    }
+
+    pub fn payload(&self) -> Option<PreviewPayload> {
+        self.0.lock().unwrap().clone()
+    }
+
+    fn clear(&self) {
+        *self.0.lock().unwrap() = None;
+    }
+}
+
+pub const PREVIEW_LABEL: &str = "preview";
 
 /// Errors produced while opening or managing output windows.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -159,6 +185,70 @@ pub fn open(
     let _ = window.set_fullscreen(true);
 
     Ok(())
+}
+
+pub fn open_preview(app: &AppHandle, item: &MediaItem) -> Result<(), RendererError> {
+    let media_url = app.state::<Registry>().register(item.clone());
+    let payload = PreviewPayload {
+        media_url,
+        title: item.name.clone(),
+    };
+    app.state::<PreviewState>().set(payload.clone());
+
+    if let Some(window) = app.get_webview_window(PREVIEW_LABEL) {
+        let _ = app.emit_to(PREVIEW_LABEL, "preview-media", payload);
+        let _ = window.show();
+        let _ = window.set_focus();
+        return Ok(());
+    }
+
+    let mut builder = WebviewWindowBuilder::new(
+        app,
+        PREVIEW_LABEL,
+        WebviewUrl::App("preview.html".into()),
+    )
+    .title(format!("Video preview \u{2014} {}", item.name))
+    .resizable(true)
+    .min_inner_size(640.0, 360.0)
+    .inner_size(960.0, 540.0)
+    .center()
+    .additional_browser_args(
+        "--autoplay-policy=no-user-gesture-required --disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection",
+    )
+    .on_web_resource_request(|_request, response| {
+        response.headers_mut().insert(
+            tauri::http::header::HeaderName::from_static("permissions-policy"),
+            tauri::http::header::HeaderValue::from_static("speaker-selection=(self)"),
+        );
+    });
+
+    if let Ok(displays) = crate::display::list_displays() {
+        if let Some(primary) = displays.iter().find(|display| display.is_primary) {
+            let width = 960.0;
+            let height = 540.0;
+            let x = primary.bounds.x as f64 + (primary.bounds.width as f64 - width).max(0.0) / 2.0;
+            let y =
+                primary.bounds.y as f64 + (primary.bounds.height as f64 - height).max(0.0) / 2.0;
+            builder = builder.position(x, y);
+        }
+    }
+
+    match builder.build() {
+        Ok(_) => Ok(()),
+        Err(err) => {
+            app.state::<PreviewState>().clear();
+            Err(RendererError::Creation(err.to_string()))
+        }
+    }
+}
+
+pub fn close_preview(app: &AppHandle) -> bool {
+    app.state::<PreviewState>().clear();
+    let Some(window) = app.get_webview_window(PREVIEW_LABEL) else {
+        return false;
+    };
+    let _ = window.close();
+    true
 }
 
 /// Opens an invisible output window that plays `item` as sound only.

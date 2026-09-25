@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Video Preview</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0f172a;
+        --panel: #1e293b;
+        --border: #334155;
+        --text: #e2e8f0;
+        --muted: #94a3b8;
+        --accent: #38bdf8;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        width: 100%;
+        height: 100%;
+        background: var(--bg);
+        color: var(--text);
+        font-family: "Segoe UI", system-ui, sans-serif;
+      }
+      .preview-shell {
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+        padding: 14px;
+        gap: 12px;
+      }
+      .preview-header,
+      .preview-footer {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+      .preview-header h1 {
+        margin: 0 0 3px;
+        font-size: 17px;
+      }
+      .preview-subtitle,
+      .preview-footer {
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .preview-actions {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-shrink: 0;
+      }
+      button {
+        border: 1px solid #0ea5e9;
+        border-radius: 6px;
+        padding: 7px 12px;
+        background: transparent;
+        color: var(--accent);
+        cursor: pointer;
+        font-size: 12px;
+      }
+      button:hover {
+        background: rgba(56, 189, 248, 0.12);
+      }
+      .stage {
+        position: relative;
+        flex: 1;
+        min-height: 0;
+        overflow: hidden;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: #000;
+      }
+      video {
+        width: 100%;
+        height: 100%;
+        display: block;
+        object-fit: contain;
+        background: #000;
+      }
+      #preview-empty {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+        color: var(--muted);
+        text-align: center;
+      }
+      #preview-empty[hidden] {
+        display: none;
+      }
+      .preview-footer {
+        min-height: 18px;
+      }
+      #preview-status {
+        color: var(--text);
+      }
+    </style>
+  </head>
+  <body>
+    <main class="preview-shell">
+      <header class="preview-header">
+        <div>
+          <h1 id="preview-title">Video preview</h1>
+          <div id="preview-subtitle" class="preview-subtitle">Audio is routed only after a laptop speaker is selected.</div>
+        </div>
+        <div class="preview-actions">
+          <button id="choose-speaker" type="button">Choose laptop speaker</button>
+          <button id="close-preview" type="button">Close</button>
+        </div>
+      </header>
+      <section class="stage">
+        <video id="preview-video" controls playsinline preload="auto"></video>
+        <div id="preview-empty">Choose a video from the playlist to preview it here.</div>
+      </section>
+      <footer class="preview-footer">
+        <span id="preview-status">Waiting for a video.</span>
+        <span>Preview audio never changes the system default.</span>
+      </footer>
+    </main>
+    <script src="preview.js" type="module"></script>
+  </body>
+</html>
