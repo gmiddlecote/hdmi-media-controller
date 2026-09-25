@@ -22,6 +22,7 @@ const statusEl = document.getElementById("status");
 const versionEl = document.getElementById("app-version");
 const updateStatusEl = document.getElementById("update-status");
 const checkUpdatesBtn = document.getElementById("check-updates-btn");
+const exitBtn = document.getElementById("exit-btn");
 const updateDialog = document.getElementById("update-dialog");
 const updateMessage = document.getElementById("update-message");
 const updateLaterBtn = document.getElementById("update-later-btn");
@@ -172,6 +173,7 @@ async function installPendingUpdate() {
 }
 
 checkUpdatesBtn.addEventListener("click", checkForUpdates);
+exitBtn.addEventListener("click", () => invoke("app_exit").catch(() => {}));
 updateLaterBtn.addEventListener("click", () => {
   dismissUpdateDialog();
   pendingUpdate = null;

@@ -22,14 +22,15 @@ pub mod update;
 
 use std::fs;
 use std::path::Path;
+use std::time::Duration;
 
 use display::model::{DisplayInfo, DisplayMode, DisplayModes};
 use media::{MediaItem, MediaKind, ObjectFit};
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Manager};
 
-#[cfg(target_os = "windows")]
-use std::time::Duration;
+/// Longest the splash window may stay up before the app reveals itself.
+const SPLASH_MAX_SECONDS: u64 = 5;
 
 /// Returns the displays detected on the current system, including their
 /// connector type (e.g. HDMI) when the display config can be queried.
@@ -242,23 +243,41 @@ fn renderer_close_preview(app: tauri::AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 fn app_ready(app: tauri::AppHandle) {
+    reveal_app(&app);
+}
+
+/// Closes the splash window and brings the main window up, maximised.
+fn reveal_app(app: &tauri::AppHandle) {
     if let Some(splash) = app.get_webview_window("splash") {
         let _ = splash.close();
     }
     if let Some(main) = app.get_webview_window("main") {
-        if let Ok(Some(monitor)) = main.primary_monitor() {
-            let _ = main.set_position(*monitor.position());
-            let _ = main.set_size(*monitor.size());
-        }
         let _ = main.show();
-        let _ = main.set_fullscreen(true);
+        let _ = main.maximize();
         let _ = main.set_focus();
     }
+}
+
+/// Reveal the app no later than five seconds after startup, even if the UI
+/// never calls `app_ready`, so the splash cannot linger on screen.
+fn start_splash_watchdog(app: tauri::AppHandle) {
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_secs(SPLASH_MAX_SECONDS));
+        let handle = app.clone();
+        let _ = app.run_on_main_thread(move || reveal_app(&handle));
+    });
 }
 
 #[tauri::command]
 fn app_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
+}
+
+/// Closes every open output window and quits the application.
+#[tauri::command]
+fn app_exit(app: tauri::AppHandle) {
+    renderer::close_all(&app);
+    app.exit(0);
 }
 
 #[tauri::command]
@@ -438,6 +457,7 @@ pub fn run() {
         .manage(renderer::PreviewState::default())
         .manage(scheduler_state.clone())
         .setup(move |app| -> Result<(), Box<dyn std::error::Error>> {
+            start_splash_watchdog(app.handle().clone());
             #[cfg(target_os = "windows")]
             begin_display_watch(app.handle().clone());
             scheduler::spawn(app.handle().clone(), command_rx, scheduler_state.clone());
@@ -456,6 +476,7 @@ pub fn run() {
             media_probe,
             app_ready,
             app_version,
+            app_exit,
             download_and_install_update,
             log_js_error,
             scheduler_stop,
