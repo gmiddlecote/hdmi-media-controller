@@ -332,6 +332,7 @@ const addPathBtn = document.getElementById("add-path-btn");
 const queueEl = document.getElementById("queue");
 const outputDisplay = document.getElementById("output-display");
 const dwellInput = document.getElementById("dwell-input");
+const volumeInput = document.getElementById("volume-input");
 const playBtn = document.getElementById("play-btn");
 const pauseBtn = document.getElementById("pause-btn");
 const resumeBtn = document.getElementById("resume-btn");
@@ -788,8 +789,19 @@ overlayInput.addEventListener("keydown", (event) => {
   if (event.key === "Enter") overlayBtn.click();
 });
 
+volumeInput.addEventListener("input", () => {
+  const level = Number(volumeInput.value) / 100;
+  invoke("renderer_set_volume", { level }).catch(() => {});
+});
+
 (async function initPlayback() {
   await pushPlaylist();
+
+  invoke("renderer_volume")
+    .then((level) => {
+      volumeInput.value = String(Math.round(level * 100));
+    })
+    .catch(() => {});
 
   dropzone.addEventListener("dragover", (event) => {
     event.preventDefault();

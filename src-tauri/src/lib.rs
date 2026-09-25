@@ -422,6 +422,27 @@ fn renderer_close_all(app: tauri::AppHandle) -> Result<usize, String> {
     Ok(renderer::close_all(&app))
 }
 
+/// Sets the volume (0.0–1.0) used for video/audio on every output window.
+#[tauri::command]
+fn renderer_set_volume(
+    app: tauri::AppHandle,
+    volume: tauri::State<'_, renderer::Volume>,
+    level: f32,
+) -> Result<(), String> {
+    volume.set(level);
+    let level = volume.get();
+    for label in app.state::<renderer::RendererState>().labels() {
+        let _ = app.emit_to(label, "output-volume", level);
+    }
+    Ok(())
+}
+
+/// Returns the current output volume, 0.0–1.0.
+#[tauri::command]
+fn renderer_volume(volume: tauri::State<'_, renderer::Volume>) -> f32 {
+    volume.get()
+}
+
 /// Polls the connected-display set and emits a `displays-changed` Tauri
 /// event when it changes, so the UI re-enumerates on hotplug.
 #[cfg(target_os = "windows")]
@@ -455,6 +476,7 @@ pub fn run() {
     let result = tauri::Builder::default()
         .manage(media::Registry::default())
         .manage(renderer::RendererState::default())
+        .manage(renderer::Volume::default())
         .manage(renderer::PreviewState::default())
         .manage(scheduler_state.clone())
         .setup(move |app| -> Result<(), Box<dyn std::error::Error>> {
@@ -497,6 +519,8 @@ pub fn run() {
             renderer_close_preview,
             renderer_close,
             renderer_close_all,
+            renderer_set_volume,
+            renderer_volume,
         ])
         .run(tauri::generate_context!());
 
@@ -558,6 +582,19 @@ mod tests {
         std::fs::write(&file, "x").unwrap();
         assert!(list_directory(file.to_string_lossy().into_owned()).is_err());
         let _ = std::fs::remove_file(&file);
+    }
+
+    #[test]
+    fn output_volume_defaults_to_full_and_clamps_what_it_is_given() {
+        let volume = renderer::Volume::default();
+        assert_eq!(volume.get(), 1.0);
+
+        volume.set(1.7);
+        assert_eq!(volume.get(), 1.0);
+        volume.set(-0.4);
+        assert_eq!(volume.get(), 0.0);
+        volume.set(0.25);
+        assert_eq!(volume.get(), 0.25);
     }
 
     #[test]
