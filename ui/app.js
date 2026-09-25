@@ -19,6 +19,17 @@ document.addEventListener("keydown", (event) => {
 const refreshBtn = document.getElementById("refresh-btn");
 const listEl = document.getElementById("display-list");
 const statusEl = document.getElementById("status");
+const versionEl = document.getElementById("app-version");
+const updateStatusEl = document.getElementById("update-status");
+const checkUpdatesBtn = document.getElementById("check-updates-btn");
+const updateDialog = document.getElementById("update-dialog");
+const updateMessage = document.getElementById("update-message");
+const updateLaterBtn = document.getElementById("update-later-btn");
+const updateInstallBtn = document.getElementById("update-install-btn");
+
+const updateApiUrl = "https://api.github.com/repos/gmiddlecote/hdmi-media-controller/releases/latest";
+let currentVersion = "";
+let pendingUpdate = null;
 
 function el(tag, className, text) {
   const node = document.createElement(tag);
@@ -46,6 +57,127 @@ function formatMode(mode) {
     mode.bitDepth ? ` (${mode.bitDepth}-bit)` : ""
   }`;
 }
+
+function parseVersion(value) {
+  const match = /^v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/i.exec(String(value).trim());
+  if (!match) return null;
+  return match.slice(1, 4).map(Number);
+}
+
+function isNewerVersion(candidate, current) {
+  const next = parseVersion(candidate);
+  const present = parseVersion(current);
+  if (!next || !present) return false;
+  for (let index = 0; index < 3; index += 1) {
+    if (next[index] !== present[index]) return next[index] > present[index];
+  }
+  return false;
+}
+
+function setUpdateStatus(message, error = false) {
+  updateStatusEl.textContent = message;
+  updateStatusEl.classList.toggle("error", error);
+}
+
+async function loadAppVersion() {
+  try {
+    currentVersion = await invoke("app_version");
+    versionEl.textContent = `Version ${currentVersion}`;
+  } catch (_) {
+    versionEl.textContent = "Version unavailable";
+  }
+}
+
+function findWindowsInstaller(release) {
+  const assets = Array.isArray(release.assets) ? release.assets : [];
+  return (
+    assets.find((asset) => /_x64-setup\.exe$/i.test(asset.name || "")) ||
+    assets.find(
+      (asset) =>
+        /\.exe$/i.test(asset.name || "") &&
+        !/blockmap|debug|symbols/i.test(asset.name || "")
+    ) ||
+    null
+  );
+}
+
+function showUpdateDialog(update) {
+  pendingUpdate = update;
+  updateMessage.textContent = `DuetPlay ${update.version} is available. Download and install it now?`;
+  updateDialog.classList.remove("hidden");
+  updateInstallBtn.focus();
+}
+
+function dismissUpdateDialog() {
+  updateDialog.classList.add("hidden");
+}
+
+async function checkForUpdates() {
+  if (!currentVersion || checkUpdatesBtn.disabled) return;
+  checkUpdatesBtn.disabled = true;
+  setUpdateStatus("Checking for updates…");
+  try {
+    const response = await fetch(updateApiUrl, {
+      cache: "no-store",
+      headers: { Accept: "application/vnd.github+json" },
+    });
+    if (!response.ok) throw new Error(`GitHub returned ${response.status}`);
+    const release = await response.json();
+    const latestVersion = String(release.tag_name || release.name || "").replace(/^v/i, "");
+    if (!isNewerVersion(latestVersion, currentVersion)) {
+      setUpdateStatus("Up to date");
+      return;
+    }
+    const asset = findWindowsInstaller(release);
+    const digest = String(asset && asset.digest ? asset.digest : "")
+      .replace(/^sha256:/i, "")
+      .toLowerCase();
+    const size = Number(asset && asset.size);
+    if (!asset || !asset.browser_download_url || !/^[0-9a-f]{64}$/.test(digest) || !Number.isSafeInteger(size) || size <= 0) {
+      setUpdateStatus(`Update ${latestVersion} has no verified Windows installer`, true);
+      return;
+    }
+    setUpdateStatus(`Update ${latestVersion} available`);
+    showUpdateDialog({
+      version: latestVersion,
+      url: asset.browser_download_url,
+      sha256: digest,
+      size,
+    });
+  } catch (_) {
+    setUpdateStatus("Update check unavailable", true);
+  } finally {
+    checkUpdatesBtn.disabled = false;
+  }
+}
+
+async function installPendingUpdate() {
+  if (!pendingUpdate) return;
+  updateInstallBtn.disabled = true;
+  updateLaterBtn.disabled = true;
+  setUpdateStatus("Downloading and installing…");
+  try {
+    await invoke("download_and_install_update", {
+      version: pendingUpdate.version,
+      url: pendingUpdate.url,
+      sha256: pendingUpdate.sha256,
+      size: pendingUpdate.size,
+    });
+  } catch (error) {
+    updateInstallBtn.disabled = false;
+    updateLaterBtn.disabled = false;
+    updateMessage.textContent = `Update failed: ${String(error)}`;
+    setUpdateStatus("Update failed", true);
+  }
+}
+
+checkUpdatesBtn.addEventListener("click", checkForUpdates);
+updateLaterBtn.addEventListener("click", () => {
+  dismissUpdateDialog();
+  pendingUpdate = null;
+  setUpdateStatus("Update available for the next launch");
+});
+updateInstallBtn.addEventListener("click", installPendingUpdate);
 
 function buildResolutionSection(card, display) {
   const section = el("div", "resolution");
@@ -724,5 +856,7 @@ overlayInput.addEventListener("keydown", (event) => {
   } catch (error) {
     playbackStatus.textContent = `Could not read playback state: ${String(error)}`;
   }
+  await loadAppVersion();
   await invoke("app_ready").catch(() => {});
+  checkForUpdates();
 })();

@@ -18,6 +18,7 @@ pub mod media;
 pub mod playlist;
 pub mod renderer;
 pub mod scheduler;
+pub mod update;
 
 use std::fs;
 use std::path::Path;
@@ -245,9 +246,30 @@ fn app_ready(app: tauri::AppHandle) {
         let _ = splash.close();
     }
     if let Some(main) = app.get_webview_window("main") {
+        if let Ok(Some(monitor)) = main.primary_monitor() {
+            let _ = main.set_position(*monitor.position());
+            let _ = main.set_size(*monitor.size());
+        }
         let _ = main.show();
+        let _ = main.set_fullscreen(true);
         let _ = main.set_focus();
     }
+}
+
+#[tauri::command]
+fn app_version() -> String {
+    env!("CARGO_PKG_VERSION").to_string()
+}
+
+#[tauri::command]
+fn download_and_install_update(
+    app: tauri::AppHandle,
+    version: String,
+    url: String,
+    sha256: String,
+    size: u64,
+) -> Result<(), String> {
+    update::start_install(&app, &version, &url, &sha256, size)
 }
 
 /// Lists audio playback devices for the per-item output selectors.
@@ -433,6 +455,8 @@ pub fn run() {
             media_register,
             media_probe,
             app_ready,
+            app_version,
+            download_and_install_update,
             log_js_error,
             scheduler_stop,
             scheduler_pause,

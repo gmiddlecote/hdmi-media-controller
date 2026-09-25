@@ -9,8 +9,15 @@
   <body>
     <main class="app">
       <header class="header">
-        <h1>DuetPlay</h1>
-        <p class="subtitle">Media playback for external displays</p>
+        <div>
+          <h1>DuetPlay</h1>
+          <p class="subtitle">Media playback for external displays</p>
+        </div>
+        <div class="header-meta">
+          <span id="app-version" class="app-version">Version …</span>
+          <button id="check-updates-btn" class="subtle-btn" type="button">Check for updates</button>
+          <span id="update-status" class="update-status" aria-live="polite"></span>
+        </div>
       </header>
 
       <section class="panel">
@@ -76,6 +83,16 @@
         <span>Displays &middot; resolutions &middot; connections &middot; playback &middot; drop files anywhere on the window</span>
       </footer>
     </main>
+    <div id="update-dialog" class="update-dialog hidden" role="dialog" aria-modal="true" aria-labelledby="update-title">
+      <div class="update-card">
+        <h2 id="update-title">Update available</h2>
+        <p id="update-message"></p>
+        <div class="update-actions">
+          <button id="update-later-btn" type="button">Later</button>
+          <button id="update-install-btn" type="button">Download &amp; install</button>
+        </div>
+      </div>
+    </div>
     <script src="app.js" type="module"></script>
   </body>
 </html>

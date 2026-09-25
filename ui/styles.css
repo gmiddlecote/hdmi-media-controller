@@ -48,6 +48,79 @@ body {
   font-size: 14px;
 }
 
+.header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+.header-meta {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.app-version,
+.update-status {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.update-status.error {
+  color: #f87171;
+}
+
+.subtle-btn {
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
+.update-dialog {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(2, 6, 23, 0.78);
+}
+
+.update-dialog.hidden {
+  display: none;
+}
+
+.update-card {
+  width: min(420px, 100%);
+  padding: 24px;
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: 10px;
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.45);
+}
+
+.update-card h2 {
+  margin: 0 0 10px;
+  font-size: 18px;
+}
+
+.update-card p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.update-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 20px;
+}
+
 .panel {
   margin-top: 24px;
   background: var(--panel);
