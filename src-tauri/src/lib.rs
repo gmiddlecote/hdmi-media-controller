@@ -127,7 +127,7 @@ fn list_directory(directory: String) -> Result<Vec<DirectoryEntry>, String> {
 
 /// One queued item as supplied by the UI: a path, its fit mode, and the
 /// display it should play on (empty to follow the master display).
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PlaylistEntry {
     path: String,
@@ -272,6 +272,43 @@ fn start_splash_watchdog(app: tauri::AppHandle) {
 #[tauri::command]
 fn app_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
+}
+
+/// The control window's state as saved between runs: the queue plus the
+/// settings that go with it.
+#[derive(Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct SessionState {
+    #[serde(default)]
+    entries: Vec<PlaylistEntry>,
+    #[serde(default)]
+    dwell_millis: u64,
+    #[serde(default)]
+    overlay: String,
+    #[serde(default)]
+    display: String,
+}
+
+fn session_path() -> std::path::PathBuf {
+    logging::data_dir().join("session.json")
+}
+
+/// Saves the control window's queue and settings for the next run.
+#[tauri::command]
+fn session_save(session: SessionState) -> Result<(), String> {
+    let path = session_path();
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir).map_err(|err| err.to_string())?;
+    }
+    let json = serde_json::to_vec_pretty(&session).map_err(|err| err.to_string())?;
+    fs::write(path, json).map_err(|err| err.to_string())
+}
+
+/// Loads the queue and settings saved by a previous run, if any.
+#[tauri::command]
+fn session_load() -> Option<SessionState> {
+    let bytes = fs::read(session_path()).ok()?;
+    serde_json::from_slice(&bytes).ok()
 }
 
 /// Closes every open output window and quits the application.
@@ -478,6 +515,8 @@ pub fn run() {
             app_ready,
             app_version,
             app_exit,
+            session_save,
+            session_load,
             download_and_install_update,
             log_js_error,
             scheduler_stop,
@@ -568,5 +607,53 @@ mod tests {
         let selected: PlaylistEntry =
             serde_json::from_str(r#"{"path":"theme.mp3","audioDevice":"device-a"}"#).unwrap();
         assert_eq!(selected.audio_device, "device-a");
+    }
+
+    #[test]
+    fn session_state_uses_the_camel_case_field_names_the_ui_sends() {
+        let from_ui = r#"{
+            "entries": [{"path":"a.jpg","fit":"contain","display":"","audioDevice":"dev"}],
+            "dwellMillis": 7000,
+            "overlay": "hello",
+            "display": "\\\\.\\DISPLAY1"
+        }"#;
+        let state: SessionState = serde_json::from_str(from_ui).unwrap();
+        assert_eq!(state.dwell_millis, 7000);
+        assert_eq!(state.overlay, "hello");
+        assert_eq!(state.entries.len(), 1);
+        assert_eq!(state.entries[0].audio_device, "dev");
+        assert_eq!(state.entries[0].fit, ObjectFit::Contain);
+
+        let written = serde_json::to_string(&state).unwrap();
+        assert!(written.contains("dwellMillis"));
+        assert!(written.contains("audioDevice"));
+    }
+
+    #[test]
+    fn saves_and_loads_the_session() {
+        let path = session_path();
+        let _ = fs::remove_file(&path);
+
+        let saved = SessionState {
+            entries: vec![PlaylistEntry {
+                path: "clip.mp4".into(),
+                fit: ObjectFit::Cover,
+                display: String::new(),
+                audio_device: String::new(),
+            }],
+            dwell_millis: 4000,
+            overlay: "caption".into(),
+            display: "DISPLAY1".into(),
+        };
+        session_save(saved).unwrap();
+
+        let loaded = session_load().expect("session should be readable");
+        assert_eq!(loaded.dwell_millis, 4000);
+        assert_eq!(loaded.overlay, "caption");
+        assert_eq!(loaded.display, "DISPLAY1");
+        assert_eq!(loaded.entries.len(), 1);
+        assert_eq!(loaded.entries[0].path, "clip.mp4");
+
+        let _ = fs::remove_file(&path);
     }
 }

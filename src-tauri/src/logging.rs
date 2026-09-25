@@ -2,11 +2,16 @@ use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::PathBuf;
 
-fn log_path() -> PathBuf {
+/// Directory the app writes its log and saved state into.
+pub fn data_dir() -> PathBuf {
     let base = std::env::var_os("LOCALAPPDATA")
         .map(PathBuf::from)
         .unwrap_or_else(std::env::temp_dir);
-    base.join("hdmi-media-controller").join("app.log")
+    base.join("hdmi-media-controller")
+}
+
+fn log_path() -> PathBuf {
+    data_dir().join("app.log")
 }
 
 pub fn init() {

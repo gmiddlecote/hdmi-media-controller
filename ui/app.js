@@ -344,6 +344,10 @@ const playbackStatus = document.getElementById("playback-status");
 let queuedPaths = [];
 let displays = [];
 
+// Master display restored from the saved session but not selectable yet
+// (displays are still being enumerated); applied by the next syncOutputSelect.
+let pendingDisplay = "";
+
 let audioDevices = [];
 
 function loadAudioDevices() {
@@ -370,7 +374,8 @@ function queueEntry(path) {
 }
 
 function syncOutputSelect(displays) {
-  const previous = outputDisplay.value;
+  const previous = pendingDisplay || outputDisplay.value;
+  pendingDisplay = "";
   outputDisplay.replaceChildren();
   if (displays.length === 0) {
     const option = el("option", "", "No displays");
@@ -616,6 +621,7 @@ function renderQueue() {
           playbackStatus.textContent = selected
             ? `Audio output saved for this item: ${selected.name}.`
             : "This item will use the current system audio output.";
+          scheduleSessionSave();
         } catch (error) {
           queued.audioDevice = previous;
           audioOutput.value = previous;
@@ -664,6 +670,84 @@ async function pushPlaylist() {
     }
   } catch (error) {
     playbackStatus.textContent = `Could not update playlist: ${String(error)}`;
+  }
+  scheduleSessionSave();
+}
+
+// ---------------------------------------------------------------------------
+// Session restore: keep the queue and settings between runs.
+// ---------------------------------------------------------------------------
+
+// Saves stay disabled until the saved session has been read, so an early
+// render cannot overwrite session.json with an empty queue.
+let sessionReady = false;
+let sessionSaveTimer = null;
+
+function scheduleSessionSave() {
+  if (!sessionReady) return;
+  clearTimeout(sessionSaveTimer);
+  sessionSaveTimer = setTimeout(saveSession, 500);
+}
+
+async function saveSession() {
+  try {
+    await invoke("session_save", {
+      session: {
+        entries: queuedPaths.map((queued) => ({
+          path: queued.path,
+          fit: queued.fit,
+          display: queued.display,
+          audioDevice: queued.audioDevice,
+        })),
+        dwellMillis: Math.max(1, Number(dwellInput.value) || 5) * 1000,
+        overlay: overlayInput.value,
+        display: outputDisplay.value || "",
+      },
+    });
+  } catch (error) {
+    playbackStatus.textContent = `Could not save session: ${String(error)}`;
+  }
+}
+
+async function restoreSession() {
+  let session = null;
+  try {
+    session = await invoke("session_load");
+  } catch (error) {
+    playbackStatus.textContent = `Could not load session: ${String(error)}`;
+  }
+  sessionReady = true;
+  if (!session) return;
+
+  if (Array.isArray(session.entries)) {
+    queuedPaths = session.entries
+      .filter((entry) => entry && typeof entry.path === "string")
+      .map((entry) => ({
+        path: entry.path,
+        fit: entry.fit === "contain" ? "contain" : "cover",
+        display: entry.display || "",
+        audioDevice: entry.audioDevice || "",
+      }));
+  }
+  if (session.dwellMillis > 0) {
+    dwellInput.value = Math.max(1, Math.round(session.dwellMillis / 1000));
+  }
+  if (typeof session.overlay === "string") {
+    overlayInput.value = session.overlay;
+    if (session.overlay) {
+      invoke("scheduler_set_overlay", { text: session.overlay }).catch(() => {});
+    }
+  }
+  if (session.display) {
+    if (displays.some((display) => display.deviceName === session.display)) {
+      outputDisplay.value = session.display;
+    } else {
+      pendingDisplay = session.display;
+    }
+  }
+  renderQueue();
+  if (queuedPaths.length > 0) {
+    playbackStatus.textContent = `${queuedPaths.length} file(s) restored from the last session.`;
   }
 }
 
@@ -780,6 +864,7 @@ overlayBtn.addEventListener("click", async () => {
   try {
     await invoke("scheduler_set_overlay", { text: overlayInput.value });
     playbackStatus.textContent = "Overlay updated.";
+    scheduleSessionSave();
   } catch (error) {
     playbackStatus.textContent = `Could not set overlay: ${String(error)}`;
   }
@@ -787,8 +872,10 @@ overlayBtn.addEventListener("click", async () => {
 overlayInput.addEventListener("keydown", (event) => {
   if (event.key === "Enter") overlayBtn.click();
 });
+dwellInput.addEventListener("change", scheduleSessionSave);
 
 (async function initPlayback() {
+  await restoreSession();
   await pushPlaylist();
 
   dropzone.addEventListener("dragover", (event) => {
@@ -827,6 +914,7 @@ overlayInput.addEventListener("keydown", (event) => {
     });
     renderQueue();
     pushPlaylist();
+    scheduleSessionSave();
   });
 
   playBtn.addEventListener("click", async () => {
