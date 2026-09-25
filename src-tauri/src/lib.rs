@@ -29,8 +29,8 @@ use media::{MediaItem, MediaKind, ObjectFit};
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Manager};
 
-/// Longest the splash window may stay up before the app reveals itself.
-const SPLASH_MAX_SECONDS: u64 = 5;
+/// How long the splash window stays up before the app reveals itself.
+const SPLASH_SECONDS: u64 = 5;
 
 /// Returns the displays detected on the current system, including their
 /// connector type (e.g. HDMI) when the display config can be queried.
@@ -241,10 +241,11 @@ fn renderer_close_preview(app: tauri::AppHandle) -> Result<(), String> {
     }
 }
 
+/// Called by the UI once the control window has loaded. The splash stays up
+/// for the full five seconds and is dismissed by [`start_splash_watchdog`],
+/// so this deliberately does not reveal the app early.
 #[tauri::command]
-fn app_ready(app: tauri::AppHandle) {
-    reveal_app(&app);
-}
+fn app_ready() {}
 
 /// Closes the splash window and brings the main window up, maximised.
 fn reveal_app(app: &tauri::AppHandle) {
@@ -258,11 +259,11 @@ fn reveal_app(app: &tauri::AppHandle) {
     }
 }
 
-/// Reveal the app no later than five seconds after startup, even if the UI
-/// never calls `app_ready`, so the splash cannot linger on screen.
+/// Reveals the app exactly [`SPLASH_SECONDS`] after startup, so the
+/// splash is shown for the full five seconds and never any longer.
 fn start_splash_watchdog(app: tauri::AppHandle) {
     std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_secs(SPLASH_MAX_SECONDS));
+        std::thread::sleep(Duration::from_secs(SPLASH_SECONDS));
         let handle = app.clone();
         let _ = app.run_on_main_thread(move || reveal_app(&handle));
     });
