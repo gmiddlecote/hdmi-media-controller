@@ -288,6 +288,14 @@ button:disabled {
   padding-top: 24px;
   font-size: 12px;
   color: var(--muted);
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.footer-hints {
+  color: var(--text);
 }
 
 .dropzone {
