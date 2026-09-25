@@ -13,7 +13,9 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+
+use crate::logging;
 
 /// Kind of media a source can carry.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -21,6 +23,17 @@ use serde::Serialize;
 pub enum MediaKind {
     Image,
     Video,
+}
+
+/// How a media element fills the output display.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ObjectFit {
+    /// Crop to cover the whole screen.
+    #[default]
+    Cover,
+    /// Shrink to fit the whole media inside the screen, letterboxing.
+    Contain,
 }
 
 /// A single playable media file.
@@ -33,6 +46,10 @@ pub struct MediaItem {
     pub name: String,
     /// Whether the file is an image or a video.
     pub kind: MediaKind,
+    /// How the media fills the output display.
+    pub fit: ObjectFit,
+    /// Display the item prefers to play on; empty inherits the caller's display.
+    pub display: String,
 }
 
 impl MediaItem {
@@ -44,7 +61,13 @@ impl MediaItem {
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_else(|| path.clone());
         let kind = kind_from_path(&path);
-        MediaItem { path, name, kind }
+        MediaItem {
+            path,
+            name,
+            kind,
+            fit: ObjectFit::default(),
+            display: String::new(),
+        }
     }
 }
 
@@ -114,10 +137,11 @@ struct RegistryInner {
 }
 
 impl Registry {
-    /// Returns the `media://localhost/<id>` URL for a file, registering it
-    /// if needed. The id lives in the *path* — webviews deliver the path to
-    /// custom-scheme handlers; an id in the authority (`media://<id>`)
-    /// shows up as an empty path and cannot be routed to the file.
+    /// Returns the URL for a file, registering it if needed. WebView2 (the
+    /// Windows webview) does not support real custom URI schemes — Tauri only
+    /// routes requests to a registered handler through `http://<scheme>.localhost`.
+    /// So on Windows the id lives in the *path* of an http URL; on other
+    /// platforms the scheme itself is delivered to the handler.
     pub fn register(&self, item: MediaItem) -> String {
         let mut inner = self.0.lock().unwrap();
         let id = match inner
@@ -133,7 +157,7 @@ impl Registry {
                 id
             }
         };
-        format!("media://localhost/{id}")
+        register_url(id)
     }
 
     /// Looks up a registered item by its numeric id.
@@ -147,11 +171,24 @@ impl Registry {
     }
 }
 
-/// Parses the numeric id from a `media://` URL: `media://localhost/<id>`
-/// (the form produced by [`Registry::register`]) or the legacy
-/// `media://<id>` shape where the id sits in the authority.
+/// Builds the `media://localhost/<id>` URL (or `http://media.localhost/<id>`
+/// on Windows, where WebView2/Tauri has no real custom scheme support).
+fn register_url(id: u64) -> String {
+    if cfg!(target_os = "windows") {
+        format!("http://media.localhost/{id}")
+    } else {
+        format!("media://localhost/{id}")
+    }
+}
+
+/// Parses the numeric id from a `media://` URL (`media://localhost/<id>`,
+/// legacy `media://<id>`) or the Windows `http://media.localhost/<id>` form.
 pub fn id_from_url(url: &str) -> Option<u64> {
-    let rest = url.strip_prefix("media://")?;
+    let rest = url.strip_prefix("media://").or_else(|| {
+        url.strip_prefix("http://")
+            .or_else(|| url.strip_prefix("https://"))?
+            .strip_prefix("media.localhost/")
+    })?;
     let token = rest
         .rsplit('/')
         .map(|part| {
@@ -206,10 +243,15 @@ pub fn serve(
 
     let id = id_from_request(request.uri());
     let Some(item) = id.and_then(|id| ctx.app_handle().state::<Registry>().get(id)) else {
+        logging::error(&format!("media:// serve 404 for uri {}", request.uri()));
         return not_found();
     };
 
     let Ok(bytes) = std::fs::read(&item.path) else {
+        logging::error(&format!(
+            "media:// serve read failed for {:?} (id {:?})",
+            item.path, id
+        ));
         return not_found();
     };
     let total = bytes.len();
@@ -227,6 +269,12 @@ pub fn serve(
         Some((start, end)) if start < total => {
             let end = end.min(total - 1);
             let body = bytes[start..=end].to_vec();
+            logging::info(&format!(
+                "media:// serve {} -> 206 {}bytes {}",
+                request.uri(),
+                body.len(),
+                mime
+            ));
             Response::builder()
                 .status(StatusCode::PARTIAL_CONTENT)
                 .header(CONTENT_TYPE, mime)
@@ -236,13 +284,21 @@ pub fn serve(
                 .body(body)
                 .unwrap_or_else(|_| not_found())
         }
-        _ => Response::builder()
-            .status(StatusCode::OK)
-            .header(CONTENT_TYPE, mime)
-            .header(ACCEPT_RANGES, "bytes")
-            .header(CONTENT_LENGTH, total)
-            .body(bytes)
-            .unwrap_or_else(|_| not_found()),
+        _ => {
+            logging::info(&format!(
+                "media:// serve {} -> 200 {}bytes {}",
+                request.uri(),
+                total,
+                mime
+            ));
+            Response::builder()
+                .status(StatusCode::OK)
+                .header(CONTENT_TYPE, mime)
+                .header(ACCEPT_RANGES, "bytes")
+                .header(CONTENT_LENGTH, total)
+                .body(bytes)
+                .unwrap_or_else(|_| not_found())
+        }
     }
 }
 
@@ -356,7 +412,9 @@ mod tests {
     fn registers_and_resolves_ids() {
         let registry = Registry::default();
         let url = registry.register(items()[0].clone());
-        assert!(url.starts_with("media://localhost/"));
+        assert!(
+            url.starts_with("media://localhost/") || url.starts_with("http://media.localhost/")
+        );
         let id = id_from_url(&url).expect("id parses");
         assert_eq!(registry.get(id), Some(items()[0].clone()));
 
@@ -374,6 +432,11 @@ mod tests {
         assert_eq!(id_from_url("media://localhost/"), None);
         assert_eq!(id_from_url("media://"), None);
         assert_eq!(id_from_url("not-media://1"), None);
+        assert_eq!(id_from_url("http://media.localhost/0"), Some(0));
+        assert_eq!(id_from_url("http://media.localhost/3?range=yes"), Some(3));
+        assert_eq!(id_from_url("https://media.localhost/5"), Some(5));
+        assert_eq!(id_from_url("http://media.localhost/"), None);
+        assert_eq!(id_from_url("http://example.com/0"), None);
 
         // Bare-path requests (some webviews deliver just `/N`).
         let uri: tauri::http::Uri = "/9".parse().unwrap();
@@ -382,6 +445,8 @@ mod tests {
         assert_eq!(id_from_request(&uri), Some(11));
         let uri: tauri::http::Uri = "media://13".parse().unwrap();
         assert_eq!(id_from_request(&uri), Some(13));
+        let uri: tauri::http::Uri = "http://media.localhost/17".parse().unwrap();
+        assert_eq!(id_from_request(&uri), Some(17));
     }
 
     #[test]

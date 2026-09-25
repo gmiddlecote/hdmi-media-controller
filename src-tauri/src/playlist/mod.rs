@@ -7,7 +7,7 @@
 //! The playlist is deliberately kept free of scheduling concerns so it can
 //! be driven by the [`crate::scheduler`] kernel or unit-tested in isolation.
 
-use crate::media::MediaItem;
+use crate::media::{MediaItem, ObjectFit};
 
 /// How a playlist behaves once it reaches its last entry.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -67,6 +67,15 @@ impl Playlist {
     pub fn replace(&mut self, items: Vec<MediaItem>) {
         self.items = items;
         self.index = self.index.min(self.items.len().saturating_sub(1));
+    }
+
+    /// Sets the fit mode on every queued item matching `path`.
+    pub fn set_fit(&mut self, path: &str, fit: ObjectFit) {
+        for item in &mut self.items {
+            if item.path == path {
+                item.fit = fit;
+            }
+        }
     }
 
     /// Appends a batch of items to the queue.

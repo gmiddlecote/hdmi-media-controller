@@ -24,7 +24,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Listener};
 
-use crate::media::{MediaItem, MediaKind};
+use crate::media::{MediaItem, MediaKind, ObjectFit};
 use crate::playlist::{Playlist, RepeatMode};
 use crate::renderer;
 
@@ -51,9 +51,12 @@ pub enum Command {
         display: String,
         mode: PlayMode,
         seconds: u64,
+        fit: ObjectFit,
     },
     /// Stop playback and close the output window.
     Stop,
+    /// Update the fit mode for an item (playlist + live output).
+    SetFit { path: String, fit: ObjectFit },
     /// Pause advancing / video playback.
     Pause,
     /// Resume advancing / video playback.
@@ -170,6 +173,8 @@ struct Single {
     mode: PlayMode,
     /// Seconds the item stays on screen for `PlayMode::Timed`.
     seconds: u64,
+    /// Fit mode applied whenever this item is (re)opened.
+    fit: ObjectFit,
 }
 
 /// How long the kernel waits between decision ticks. Small enough for
@@ -235,17 +240,34 @@ impl Kernel {
                         display,
                         mode,
                         seconds,
+                        fit,
                     } => {
-                        let item = MediaItem::from_path(path);
+                        let mut item = MediaItem::from_path(path);
+                        item.fit = fit;
                         single = Some(Single {
                             path: item.path.clone(),
                             title: item.name.clone(),
                             index: playlist.position(&item.path),
                             mode,
                             seconds: seconds.max(1),
+                            fit,
                         });
                         playing = self.start_item(&item, &display, &mut session, &mut seq);
                         paused = false;
+                    }
+                    Command::SetFit { path, fit } => {
+                        playlist.set_fit(&path, fit);
+                        if let Some(active) = single.as_mut() {
+                            if active.path == path {
+                                active.fit = fit;
+                            }
+                        }
+                        if let Some(active) = session.as_ref() {
+                            if active.path == path {
+                                renderer::set_fit(&self.app, &active.label, fit);
+                                let _ = self.app.emit_to(&active.label, "fit-updated", fit);
+                            }
+                        }
                     }
                     Command::Stop => {
                         self.stop(&mut session, &mut playing, &mut paused, &mut single)
@@ -338,7 +360,8 @@ impl Kernel {
                             Some(active_single) if active_single.mode != PlayMode::Once => {
                                 // Loop / Timed: restart the item to fill the slot.
                                 let display = display_of(&session);
-                                let item = MediaItem::from_path(active_single.path.clone());
+                                let mut item = MediaItem::from_path(active_single.path.clone());
+                                item.fit = active_single.fit;
                                 let opened =
                                     self.start_item(&item, &display, &mut session, &mut seq);
                                 if !opened {
@@ -382,7 +405,8 @@ impl Kernel {
         }
     }
 
-    /// Opens the playlist's current entry on `display`.
+    /// Opens the playlist's current entry on its preferred display (or the
+    /// display given here when the item does not fix one).
     fn start(
         &self,
         playlist: &Playlist,
@@ -395,7 +419,12 @@ impl Kernel {
             self.close_session(session);
             return false;
         };
-        self.start_item(&item, display, session, seq)
+        let target = if item.display.is_empty() {
+            display.to_string()
+        } else {
+            item.display.clone()
+        };
+        self.start_item(&item, &target, session, seq)
     }
 
     /// Opens one item on `display`, replacing any active output.

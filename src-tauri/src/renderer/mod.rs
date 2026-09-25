@@ -18,7 +18,7 @@ use std::sync::Mutex;
 use serde::Serialize;
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 
-use crate::media::{self, MediaItem, MediaKind, Registry};
+use crate::media::{self, MediaItem, MediaKind, ObjectFit, Registry};
 
 /// One open output window and what it is showing.
 pub struct RenderSession {
@@ -37,6 +37,8 @@ pub struct RenderPayload {
     pub title: String,
     /// Optional caption rendered over the bottom edge of the output.
     pub overlay: String,
+    /// How the media fills the output (`cover` or `contain`).
+    pub fit: ObjectFit,
 }
 
 /// Tracks open output windows, keyed by their webview label.
@@ -116,6 +118,7 @@ pub fn open(
         kind: item.kind,
         title: item.name.clone(),
         overlay: overlay.to_string(),
+        fit: item.fit,
     };
     // Register the payload *before* building the window: a newly created
     // webview can start executing render.html (and invoke the token) before
@@ -136,6 +139,12 @@ pub fn open(
     .resizable(false)
     .always_on_top(true)
     .skip_taskbar(true)
+    // Allow video autoplay with sound (output windows should start playing
+    // immediately). Wry's Windows defaults are re-applied because setting
+    // custom args replaces them.
+    .additional_browser_args(
+        "--autoplay-policy=no-user-gesture-required --disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection",
+    )
     .position(bounds.x as f64, bounds.y as f64)
     .inner_size(bounds.width as f64, bounds.height as f64)
     .build()
@@ -174,6 +183,18 @@ pub fn close(app: &AppHandle, label: &str) -> bool {
 pub fn close_all(app: &AppHandle) -> usize {
     let labels = app.state::<RendererState>().labels();
     labels.into_iter().filter(|label| close(app, label)).count()
+}
+
+/// Refreshes the stored payload's fit mode for an open window, so a re-fetch
+/// of the render token reflects the change. Returns whether the window exists.
+pub fn set_fit(app: &AppHandle, label: &str, fit: ObjectFit) -> bool {
+    let state = app.state::<RendererState>();
+    let mut sessions = state.0.lock().unwrap();
+    let Some(session) = sessions.get_mut(label) else {
+        return false;
+    };
+    session.payload.fit = fit;
+    true
 }
 
 /// Number of output windows currently open.

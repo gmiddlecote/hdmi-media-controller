@@ -25,6 +25,16 @@ function badge(label, on) {
   return el("span", `badge ${on ? "badge-on" : "badge-off"}`, label);
 }
 
+/// Label for a display dropdown, using the OS device number (DISPLAY1 ->
+/// "Display 1") since monitor make/model is often generic.
+function displayLabel(display) {
+  const device = display.deviceName || "";
+  const tail = device.slice(device.lastIndexOf("\\") + 1);
+  const match = /DISPLAY(\d+)/i.exec(tail);
+  const name = match ? `Display ${match[1]}` : display.friendlyName;
+  return `${name} (${display.connectionKind || "unknown connector"})`;
+}
+
 function formatMode(mode) {
   return `${mode.width}x${mode.height} @ ${mode.refreshRate} Hz${
     mode.bitDepth ? ` (${mode.bitDepth}-bit)` : ""
@@ -109,9 +119,11 @@ function buildResolutionSection(card, display) {
   card.append(section);
 }
 
-function renderDisplays(displays) {
+function renderDisplays(list) {
+  displays = list;
   listEl.replaceChildren();
-  syncOutputSelect(displays);
+  syncOutputSelect(list);
+  renderQueue();
 
   if (displays.length === 0) {
     listEl.append(
@@ -189,6 +201,11 @@ const stopBtn = document.getElementById("stop-btn");
 const playbackStatus = document.getElementById("playback-status");
 
 let queuedPaths = [];
+let displays = [];
+
+function queueEntry(path) {
+  return { path, fit: "cover", display: outputDisplay.value || "" };
+}
 
 function syncOutputSelect(displays) {
   const previous = outputDisplay.value;
@@ -200,11 +217,7 @@ function syncOutputSelect(displays) {
     outputDisplay.disabled = true;
   } else {
     displays.forEach((display) => {
-      const option = el(
-        "option",
-        "",
-        `${display.friendlyName} (${display.connectionKind || "unknown connector"})`
-      );
+      const option = el("option", "", displayLabel(display));
       option.value = display.deviceName;
       outputDisplay.append(option);
     });
@@ -222,29 +235,42 @@ function mediaKind(path) {
   return VIDEO_RE.test(path) ? "video" : "image";
 }
 
-/// Starts one specific queued item with the chosen mode on the selected
-/// output display. `mode` is `once`, `loop`, or `timed` (backend enum).
+/// Starts one specific queued item with the chosen mode on its monitor (or
+/// the master monitor when the item inherits it). `mode` is `once`, `loop`,
+/// or `timed` (backend enum).
 async function playItem(path, mode, seconds) {
-  const device = outputDisplay.value;
+  const entry = queuedPaths.find((queued) => queued.path === path);
+  const device = (entry && entry.display) || outputDisplay.value || "";
   if (!device) {
     playbackStatus.textContent = "Choose an output display first.";
     return;
   }
+  const fit = entry ? entry.fit : "cover";
   try {
     await invoke("scheduler_play_item", {
       path,
       deviceName: device,
       mode,
       seconds: seconds > 0 ? seconds : 5,
+      fit,
     });
   } catch (error) {
     playbackStatus.textContent = `Could not play: ${String(error)}`;
   }
 }
 
+let lastSnapshot = null;
+
+function setItemFit(path, fit) {
+  if (lastSnapshot && lastSnapshot.playing && lastSnapshot.path === path) {
+    invoke("scheduler_set_fit", { path, fit }).catch(() => {});
+  }
+}
+
 function renderQueue() {
   queueEl.replaceChildren();
-  queuedPaths.forEach((path, index) => {
+  queuedPaths.forEach((queued, index) => {
+    const path = queued.path;
     const item = el("li", "queued-item");
 
     // Thumbnail area — click = play once. A live frame comes from the
@@ -306,6 +332,20 @@ function renderQueue() {
     timed.addEventListener("click", () => {
       playItem(path, "timed", Number(seconds.value) || 5);
     });
+    const fit = el("select", "fit-select");
+    fit.title = "How the media fills the screen";
+    fit.addEventListener("click", (event) => event.stopPropagation());
+    const cover = el("option", "", "cover");
+    cover.value = "cover";
+    const contain = el("option", "", "contain");
+    contain.value = "contain";
+    fit.append(cover, contain);
+    fit.value = queued.fit;
+    fit.addEventListener("change", () => {
+      queued.fit = fit.value;
+      pushPlaylist();
+      setItemFit(path, fit.value);
+    });
     const remove = el("button", "queued-remove", "\u2715");
     remove.title = "Remove from playlist";
     remove.disabled = index === activeIndex;
@@ -315,7 +355,24 @@ function renderQueue() {
       pushPlaylist();
     });
 
-    actions.append(once, loop, seconds, timed, remove);
+    const monitor = el("select", "monitor-select");
+    monitor.title = "Monitor this item plays on (\u201cMaster\u201d follows the master dropdown)";
+    monitor.addEventListener("click", (event) => event.stopPropagation());
+    const inherit = el("option", "", "Master");
+    inherit.value = "";
+    monitor.append(inherit);
+    displays.forEach((display) => {
+      const opt = el("option", "", displayLabel(display));
+      opt.value = display.deviceName;
+      monitor.append(opt);
+    });
+    monitor.value = queued.display || "";
+    monitor.addEventListener("change", () => {
+      queued.display = monitor.value;
+      pushPlaylist();
+    });
+
+    actions.append(once, loop, seconds, timed, fit, monitor, remove);
     body.append(nameEl, actions);
     item.append(media, body);
     queueEl.append(item);
@@ -327,9 +384,11 @@ function renderQueue() {
 }
 
 async function addPaths(paths) {
-  const accepted = paths.filter((path) => !queuedPaths.includes(path));
+  const accepted = paths.filter(
+    (path) => !queuedPaths.some((queued) => queued.path === path)
+  );
   if (accepted.length === 0) return;
-  queuedPaths.push(...accepted);
+  queuedPaths.push(...accepted.map(queueEntry));
   renderQueue();
   await pushPlaylist();
   playbackStatus.textContent = `${accepted.length} file(s) added to the playlist.`;
@@ -337,7 +396,13 @@ async function addPaths(paths) {
 
 async function pushPlaylist() {
   try {
-    const accepted = await invoke("scheduler_set_playlist", { paths: queuedPaths });
+    const accepted = await invoke("scheduler_set_playlist", {
+      entries: queuedPaths.map((queued) => ({
+        path: queued.path,
+        fit: queued.fit,
+        display: queued.display,
+      })),
+    });
     if (accepted < queuedPaths.length) {
       playbackStatus.textContent = `${queuedPaths.length - accepted} file(s) skipped (not found on disk).`;
     }
@@ -349,6 +414,7 @@ async function pushPlaylist() {
 let activeIndex = -1;
 
 function updateSnapshot(snapshot) {
+  lastSnapshot = snapshot;
   const kind = snapshot.playing ? (snapshot.paused ? "Paused" : "Playing") : "Idle";
   const where = snapshot.display ? `on ${snapshot.display}` : "";
   const title = snapshot.title ? `\u201c${snapshot.title}\u201d` : "(empty playlist)";
@@ -441,94 +507,6 @@ function updateNowPlaying(snapshot) {
 }
 
 // ---------------------------------------------------------------------------
-// File browser.
-// ---------------------------------------------------------------------------
-
-const browseInput = document.getElementById("browse-input");
-const browseGoBtn = document.getElementById("browse-go-btn");
-const browseUpBtn = document.getElementById("browse-up-btn");
-const browseStatus = document.getElementById("browser-status");
-const browserEl = document.getElementById("browser");
-const homePath = navigator.userAgent.includes("Windows") ? "C:\\" : "/";
-const browseStack = [];
-
-async function loadBrowser(index) {
-  const path = browseStack[index];
-  try {
-    const entries = await invoke("list_directory", { directory: path });
-    browseStatus.textContent = path;
-    browseUpBtn.disabled = index === 0;
-    renderBrowser(entries);
-  } catch (error) {
-    browseStatus.textContent = `Could not read ${path}: ${String(error)}`;
-  }
-}
-
-function renderBrowser(entries) {
-  browserEl.replaceChildren();
-  if (entries.length === 0) {
-    browserEl.append(
-      el("div", "card-status", "This folder has no sub-folders or media files.")
-    );
-    return;
-  }
-  for (const entry of entries) {
-    const row = el("div", `browse-row${entry.kind === "other" ? " other" : ""}`);
-    const kindTag = el(
-      "span",
-      `browse-kind${entry.kind === "image" || entry.kind === "video" ? " media" : ""}`,
-      entry.kind.toUpperCase()
-    );
-    const name = el("button", "browse-name", entry.name);
-    name.title = entry.path;
-    row.append(kindTag);
-
-    const openFolder = () => {
-      browseStack.push(entry.path);
-      loadBrowser(browseStack.length - 1);
-    };
-    const queueFromBrowser = () => {
-      addPaths([entry.path]);
-      playbackStatus.textContent = `${entry.name} queued from browser.`;
-    };
-
-    if (entry.kind === "dir") {
-      name.addEventListener("click", openFolder);
-      const open = el("button", "browse-action", "Open");
-      open.addEventListener("click", openFolder);
-      row.append(name, open);
-    } else if (entry.kind === "image" || entry.kind === "video") {
-      name.addEventListener("click", queueFromBrowser);
-      const add = el("button", "browse-action", "Add");
-      add.addEventListener("click", queueFromBrowser);
-      row.append(name, add);
-    } else {
-      row.append(name);
-    }
-    browserEl.append(row);
-  }
-}
-
-browseGoBtn.addEventListener("click", () => {
-  const path = browseInput.value.trim();
-  if (!path) return;
-  browseStack.length = 0;
-  browseStack.push(path);
-  loadBrowser(0);
-});
-browseInput.addEventListener("keydown", (event) => {
-  if (event.key === "Enter") browseGoBtn.click();
-});
-browseUpBtn.addEventListener("click", () => {
-  if (browseStack.length <= 1) return;
-  browseStack.pop();
-  loadBrowser(browseStack.length - 1);
-});
-browseStack.push(homePath);
-browseInput.value = homePath;
-loadBrowser(0);
-
-// ---------------------------------------------------------------------------
 // Output overlay caption.
 // ---------------------------------------------------------------------------
 
@@ -577,6 +555,15 @@ overlayInput.addEventListener("keydown", (event) => {
   });
   pathInput.addEventListener("keydown", (event) => {
     if (event.key === "Enter") addPathBtn.click();
+  });
+
+  outputDisplay.addEventListener("change", () => {
+    const value = outputDisplay.value;
+    queuedPaths.forEach((queued) => {
+      queued.display = value;
+    });
+    renderQueue();
+    pushPlaylist();
   });
 
   playBtn.addEventListener("click", async () => {

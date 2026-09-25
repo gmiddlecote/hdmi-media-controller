@@ -122,7 +122,7 @@ impl StateFlags {
         self.0 & DISPLAY_DEVICE_PRIMARY_DEVICE != 0
     }
 
-    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    #[cfg(test)]
     pub(crate) fn is_mirroring(self) -> bool {
         self.0 & DISPLAY_DEVICE_MIRRORING_DRIVER != 0
     }

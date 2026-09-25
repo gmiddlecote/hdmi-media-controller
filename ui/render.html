@@ -33,12 +33,13 @@
         font-size: 13px;
         text-align: left;
       }
-      img,
-      video {
-        display: block;
-        max-width: 100%;
-        max-height: 100%;
-        object-fit: contain;
+      #stage.media img,
+      #stage.media video {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
         background: #000;
         animation: media-fade 0.5s ease both;
       }
@@ -77,10 +78,18 @@
 
         window.addEventListener("error", function (evt) {
           fail("Uncaught error: " + (evt && evt.message ? evt.message : String(evt)));
+          logJsError(evt && evt.message ? evt.message : String(evt));
         });
         window.addEventListener("unhandledrejection", function (evt) {
           fail("Unhandled rejection: " + (evt && evt.reason ? String(evt.reason) : String(evt)));
+          logJsError(evt && evt.reason ? String(evt.reason) : String(evt));
         });
+
+        function logJsError(message) {
+          try {
+            core.invoke("log_js_error", { message: "[render] " + String(message) }).catch(function () {});
+          } catch (_) {}
+        }
 
         fail("Initialising output window...");
         if (!window.__TAURI__) {
@@ -100,24 +109,26 @@
 
         fail("Output window ready (" + label + ")...");
 
-        function failWithDiagnostics(base) {
+        function failWithDiagnostics(base, mediaUrl) {
           core
-            .invoke("media_probe", { url: payload.mediaUrl })
+            .invoke("media_probe", { url: mediaUrl })
             .then(function (probe) {
-              fail(
+              var detail =
                 base +
-                  "\nURL: " + probe.url +
-                  "\nid: " + (probe.id === null ? "none" : String(probe.id)) +
-                  "  registered: " + probe.registered +
-                  "  kind: " + (probe.kind || "unknown") +
-                  "  mime: " + (probe.mime || "unknown") +
-                  "\npath: " + (probe.path || "none") +
-                  "\nexists: " + probe.exists +
-                  "  size: " + (probe.size === null ? "unknown" : probe.size + " bytes")
-              );
+                "\nURL: " + probe.url +
+                "\nid: " + (probe.id === null ? "none" : String(probe.id)) +
+                "  registered: " + probe.registered +
+                "  kind: " + (probe.kind || "unknown") +
+                "  mime: " + (probe.mime || "unknown") +
+                "\npath: " + (probe.path || "none") +
+                "\nexists: " + probe.exists +
+                "  size: " + (probe.size === null ? "unknown" : probe.size + " bytes");
+              fail(detail);
+              logJsError(detail);
             })
             .catch(function () {
               fail(base);
+              logJsError(base);
             });
         }
 
@@ -135,6 +146,13 @@
           el.textContent = String(text);
         }
 
+        function applyFit(fit) {
+          const media = stage.querySelector("img, video");
+          if (media && (fit === "contain" || fit === "cover")) {
+            media.style.objectFit = fit;
+          }
+        }
+
         // Last resort for an orphaned output window: close it from the webview.
         function closeSelf() {
           try {
@@ -145,13 +163,13 @@
         core
           .invoke("renderer_render_token", { label })
           .then(function (payload) {
+            stage.textContent = "";
             document.title = "HDMI Media Output \u2014 " + (payload.title || "");
             setOverlay(payload.overlay || "");
 
             if (payload.kind === "video") {
               const video = document.createElement("video");
               video.autoplay = true;
-              video.muted = true;
               video.playsInline = true;
               video.preload = "auto";
               video.addEventListener("ended", function () {
@@ -165,14 +183,16 @@
                 });
               });
               video.addEventListener("error", function () {
-                failWithDiagnostics("Video could not be decoded: " + (payload.title || payload.mediaUrl));
+                failWithDiagnostics("Video could not be decoded: " + (payload.title || payload.mediaUrl), payload.mediaUrl);
               });
               video.src = payload.mediaUrl;
               stage.className = "media";
               stage.append(video);
+              applyFit(payload.fit);
               video.play().catch(function () {});
 
-              // Browsers block autoplay with sound; also try on first click.
+              // Fallback: if the webview still blocks autoplay with sound, start on
+              // the first click.
               document.addEventListener("click", function play() {
                 video.play().catch(function () {});
               });
@@ -180,11 +200,12 @@
               const img = document.createElement("img");
               img.alt = "";
               img.addEventListener("error", function () {
-                failWithDiagnostics("Image could not be decoded: " + (payload.title || payload.mediaUrl));
+                failWithDiagnostics("Image could not be decoded: " + (payload.title || payload.mediaUrl), payload.mediaUrl);
               });
               img.src = payload.mediaUrl;
               stage.className = "media";
               stage.append(img);
+              applyFit(payload.fit);
             }
           })
           .catch(function (err) {
@@ -209,6 +230,10 @@
 
         event.listen("overlay-text", function (evt) {
           setOverlay(evt.payload);
+        });
+
+        event.listen("fit-updated", function (evt) {
+          applyFit(evt.payload);
         });
 
         event.listen("output-control", function (evt) {

@@ -91,6 +91,7 @@ button:disabled {
 
 .display-list {
   display: grid;
+  grid-template-columns: repeat(2, 1fr);
   gap: 10px;
 }
 
@@ -345,6 +346,25 @@ button:disabled {
   font-size: 12px;
 }
 
+.queued-actions .fit-select {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  padding: 4px 6px;
+  font-size: 12px;
+}
+
+.queued-actions .monitor-select {
+  max-width: 220px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  padding: 4px 6px;
+  font-size: 12px;
+}
+
 .queued-remove {
   margin-left: auto;
   border: none;
@@ -385,73 +405,6 @@ button:disabled {
   border-radius: 6px;
   padding: 6px 6px;
   font-size: 13px;
-}
-
-.browser {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  max-height: 260px;
-  overflow-y: auto;
-}
-
-.browse-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 13px;
-  padding: 4px 8px;
-  border-radius: 6px;
-}
-
-.browse-row:hover {
-  background: rgba(56, 189, 248, 0.08);
-}
-
-.browse-kind {
-  flex: 0 0 auto;
-  font-size: 10px;
-  letter-spacing: 0.08em;
-  color: var(--muted);
-  width: 30px;
-}
-
-.browse-kind.media {
-  color: var(--accent);
-}
-
-.browse-name {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  cursor: pointer;
-  border: none;
-  background: none;
-  color: var(--text);
-  padding: 0;
-  text-align: left;
-  font-size: 13px;
-}
-
-.browse-name:hover {
-  color: var(--accent);
-}
-
-.browse-row.other .browse-name {
-  color: var(--off);
-  cursor: default;
-}
-
-.browse-row.other .browse-name:hover {
-  color: var(--off);
-}
-
-.browse-action {
-  flex: 0 0 auto;
-  font-size: 12px;
-  padding: 2px 10px;
 }
 
 .now-playing {

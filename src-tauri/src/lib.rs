@@ -11,6 +11,7 @@
 //! - [`renderer`] — fullscreen/borderless output on the selected display.
 
 pub mod display;
+pub mod logging;
 pub mod media;
 pub mod playlist;
 pub mod renderer;
@@ -20,8 +21,8 @@ use std::fs;
 use std::path::Path;
 
 use display::model::{DisplayInfo, DisplayMode, DisplayModes};
-use media::MediaItem;
-use serde::Serialize;
+use media::{MediaItem, ObjectFit};
+use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Manager};
 
 #[cfg(target_os = "windows")]
@@ -118,18 +119,34 @@ fn list_directory(directory: String) -> Result<Vec<DirectoryEntry>, String> {
     }
 }
 
+/// One queued item as supplied by the UI: a path, its fit mode, and the
+/// display it should play on (empty to follow the master display).
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PlaylistEntry {
+    path: String,
+    #[serde(default)]
+    fit: ObjectFit,
+    #[serde(default)]
+    display: String,
+}
+
 /// Replaces the playback queue from a list of file paths. Files that do not
 /// exist (or are directories) are skipped. Returns how many were queued.
 #[tauri::command]
 fn scheduler_set_playlist(
     state: tauri::State<'_, scheduler::State>,
-    paths: Vec<String>,
+    entries: Vec<PlaylistEntry>,
 ) -> Result<usize, String> {
-    let items: Vec<MediaItem> = paths
+    let items: Vec<MediaItem> = entries
         .iter()
-        .filter_map(|path| {
-            media::canonical_path(Path::new(path))
-                .map(|path| MediaItem::from_path(path.to_string_lossy().into_owned()))
+        .filter_map(|entry| {
+            media::canonical_path(Path::new(&entry.path)).map(|path| {
+                let mut item = MediaItem::from_path(path.to_string_lossy().into_owned());
+                item.fit = entry.fit;
+                item.display = entry.display.clone();
+                item
+            })
         })
         .collect();
     state.send(scheduler::Command::SetPlaylist(items.clone()))?;
@@ -156,6 +173,7 @@ fn scheduler_play_item(
     device_name: String,
     mode: scheduler::PlayMode,
     seconds: u64,
+    fit: ObjectFit,
 ) -> Result<(), String> {
     let canonical = media::canonical_path(Path::new(&path))
         .map(|path| path.to_string_lossy().into_owned())
@@ -165,6 +183,7 @@ fn scheduler_play_item(
         display: device_name,
         mode,
         seconds,
+        fit,
     })
 }
 
@@ -237,6 +256,17 @@ fn scheduler_set_overlay(
     Ok(())
 }
 
+/// Sets the fit mode (`cover` or `contain`) for an item, both in the queued
+/// playlist and, when it is currently on screen, on the live output window.
+#[tauri::command]
+fn scheduler_set_fit(
+    state: tauri::State<'_, scheduler::State>,
+    path: String,
+    fit: ObjectFit,
+) -> Result<(), String> {
+    state.send(scheduler::Command::SetFit { path, fit })
+}
+
 /// Returns the current playback status for the control UI.
 #[tauri::command]
 fn scheduler_status(state: tauri::State<'_, scheduler::State>) -> scheduler::Snapshot {
@@ -246,6 +276,11 @@ fn scheduler_status(state: tauri::State<'_, scheduler::State>) -> scheduler::Sna
 /// Returns the media payload an output window should render.
 ///
 /// Called by `render.html` with its own window label.
+#[tauri::command]
+fn log_js_error(message: String) {
+    logging::error(&message);
+}
+
 #[tauri::command]
 fn renderer_render_token(
     app: tauri::AppHandle,
@@ -297,10 +332,12 @@ fn begin_display_watch(app: tauri::AppHandle) {
 }
 
 pub fn run() {
+    logging::init();
     let (command_tx, command_rx) = std::sync::mpsc::channel::<scheduler::Command>();
     let scheduler_state = scheduler::State::new(command_tx);
 
-    tauri::Builder::default()
+    logging::info("initialising tauri builder");
+    let result = tauri::Builder::default()
         .manage(media::Registry::default())
         .manage(renderer::RendererState::default())
         .manage(scheduler_state.clone())
@@ -321,6 +358,7 @@ pub fn run() {
             scheduler_play_item,
             media_register,
             media_probe,
+            log_js_error,
             scheduler_stop,
             scheduler_pause,
             scheduler_resume,
@@ -328,13 +366,22 @@ pub fn run() {
             scheduler_prev,
             scheduler_set_dwell,
             scheduler_set_overlay,
+            scheduler_set_fit,
             scheduler_status,
             renderer_render_token,
             renderer_close,
             renderer_close_all,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .run(tauri::generate_context!());
+
+    match result {
+        Ok(()) => logging::info("application exited normally"),
+        Err(e) => {
+            let msg = format!("tauri application error: {e}");
+            logging::error(&msg);
+            eprintln!("{msg}");
+        }
+    }
 }
 
 #[cfg(test)]
