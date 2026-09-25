@@ -10,10 +10,38 @@
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
 
+// Transport shortcuts: Esc stop, Space pause/resume, ←/→ previous/next.
+// Ignored while typing so they do not fight with the text fields.
 document.addEventListener("keydown", (event) => {
-  if (event.key !== "Escape" || event.repeat) return;
-  event.preventDefault();
-  invoke("scheduler_stop").catch(() => {});
+  if (event.key === "Escape") {
+    if (event.repeat) return;
+    event.preventDefault();
+    invoke("scheduler_stop").catch(() => {});
+    return;
+  }
+
+  const target = event.target;
+  const typing =
+    target &&
+    (target.tagName === "INPUT" ||
+      target.tagName === "SELECT" ||
+      target.tagName === "TEXTAREA" ||
+      target.isContentEditable);
+  if (typing) return;
+
+  if (event.key === " " || event.key === "Spacebar") {
+    event.preventDefault();
+    if (!lastSnapshot || !lastSnapshot.playing) return;
+    const command = lastSnapshot.paused ? "scheduler_resume" : "scheduler_pause";
+    invoke(command).catch(() => {});
+    return;
+  }
+
+  if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+    event.preventDefault();
+    const command = event.key === "ArrowLeft" ? "scheduler_prev" : "scheduler_next";
+    invoke(command).catch(() => {});
+  }
 });
 
 const refreshBtn = document.getElementById("refresh-btn");
