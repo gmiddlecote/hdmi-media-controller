@@ -293,6 +293,22 @@ function setItemFit(path, fit) {
   }
 }
 
+function moveQueuedItem(index, offset) {
+  const nextIndex = index + offset;
+  if (nextIndex < 0 || nextIndex >= queuedPaths.length) return;
+  [queuedPaths[index], queuedPaths[nextIndex]] = [
+    queuedPaths[nextIndex],
+    queuedPaths[index],
+  ];
+  if (activeIndex === index) {
+    activeIndex = nextIndex;
+  } else if (activeIndex === nextIndex) {
+    activeIndex = index;
+  }
+  renderQueue();
+  pushPlaylist();
+}
+
 function renderQueue() {
   queueEl.replaceChildren();
   queuedPaths.forEach((queued, index) => {
@@ -399,6 +415,15 @@ function renderQueue() {
       pushPlaylist();
     });
 
+    const up = el("button", "action", "Up");
+    up.title = "Move this item up";
+    up.disabled = index === 0;
+    up.addEventListener("click", () => moveQueuedItem(index, -1));
+    const down = el("button", "action", "Down");
+    down.title = "Move this item down";
+    down.disabled = index === queuedPaths.length - 1;
+    down.addEventListener("click", () => moveQueuedItem(index, 1));
+
     let audioOutput = null;
     if (mediaKind(path) === "audio") {
       if (
@@ -443,7 +468,7 @@ function renderQueue() {
       });
     }
 
-    actions.append(once, loop, seconds, timed, fit, monitor);
+    actions.append(once, loop, seconds, timed, fit, monitor, up, down);
     if (audioOutput) actions.append(audioOutput);
     actions.append(remove);
     body.append(nameEl, actions);

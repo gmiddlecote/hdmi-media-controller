@@ -327,13 +327,22 @@ impl Kernel {
                     }
                     Command::SetPlaylist(items) => {
                         if items.is_empty() {
-                            self.stop(&mut session, &mut playing, &mut paused, &mut single);
-                        } else if playing && single.is_none() {
-                            playlist.replace(items);
-                            let display = display_of(&session);
-                            playing = self.start(&playlist, &display, &mut session, &mut seq);
+                            self.stop(&mut session, &mut playing, &mut paused, &mut single)
                         } else {
+                            let was_playing_playlist = playing && single.is_none();
+                            let active_path = session.as_ref().map(|active| active.path.clone());
                             playlist.replace(items);
+                            if let Some(active) = single.as_mut() {
+                                active.index = playlist.position(&active.path);
+                            }
+                            if was_playing_playlist
+                                && !active_path
+                                    .as_deref()
+                                    .is_some_and(|path| playlist.position(path).is_some())
+                            {
+                                let display = display_of(&session);
+                                playing = self.start(&playlist, &display, &mut session, &mut seq);
+                            }
                         }
                     }
                 }

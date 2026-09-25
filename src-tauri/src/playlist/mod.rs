@@ -63,10 +63,15 @@ impl Playlist {
         self.index
     }
 
-    /// Replaces the whole queue, keeping the cursor in range.
+    /// Replaces the whole queue, keeping the current item selected when it
+    /// remains in the new queue.
     pub fn replace(&mut self, items: Vec<MediaItem>) {
+        let current_path = self.current().map(|item| item.path.clone());
         self.items = items;
-        self.index = self.index.min(self.items.len().saturating_sub(1));
+        self.index = current_path
+            .as_deref()
+            .and_then(|path| self.position(path))
+            .unwrap_or_else(|| self.index.min(self.items.len().saturating_sub(1)));
     }
 
     /// Sets the fit mode on every queued item matching `path`.
@@ -232,6 +237,18 @@ mod tests {
         playlist.advance();
         playlist.remove(0);
         assert_eq!(playlist.index(), 0);
+        assert_eq!(playlist.current().unwrap().name, "b.png");
+    }
+
+    #[test]
+    fn replace_keeps_current_item_by_path() {
+        let mut playlist = Playlist::new();
+        playlist.replace(media(&["a", "b", "c"]));
+        playlist.advance();
+
+        playlist.replace(media(&["c", "b", "a"]));
+
+        assert_eq!(playlist.index(), 1);
         assert_eq!(playlist.current().unwrap().name, "b.png");
     }
 

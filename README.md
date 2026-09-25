@@ -26,8 +26,8 @@ while the control UI stays on the laptop display.
   advances the playlist, dwells on images, pauses/resumes on demand, and
   drives render windows (`playlist` + `scheduler` modules).
 - **Per-item controls**: every queued item shows a live thumbnail and can be
-  played once, looped, or shown for a selected number of seconds on the
-  chosen output. Audio items have their own playback-device selector.
+  played once, looped, shown for a selected number of seconds, or moved up and
+  down in the playlist. Audio items have their own playback-device selector.
 - **In-app file browser**: browse folders on disk and add files without
   drag-and-drop (`list_directory` command).
 - **Playback progress**: the control UI shows the current item's thumbnail
