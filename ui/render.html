@@ -207,9 +207,16 @@
                   duration: video.duration,
                 });
               });
+              video.addEventListener("loadedmetadata", function () {
+                // First frame decoded; poster is replaced by video.
+              });
+              video.addEventListener("playing", function () {
+                stage.querySelector(".loading")?.remove();
+              });
               video.addEventListener("error", function () {
                 failWithDiagnostics("Video could not be decoded: " + (payload.title || payload.mediaUrl), payload.mediaUrl);
               });
+              video.poster = payload.posterUrl || "";
               video.src = payload.mediaUrl;
               stage.className = "media";
               stage.append(video);

@@ -31,6 +31,8 @@ pub struct RenderSession {
 pub struct RenderPayload {
     /// `media://<id>` URL to load.
     pub media_url: String,
+    /// `media://` poster URL (thumbnail or first frame) shown before load.
+    pub poster_url: String,
     /// Media kind — decides which element `render.html` creates.
     pub kind: MediaKind,
     /// Friendly title shown as the window title and element fallback text.
@@ -164,6 +166,7 @@ pub fn open(
 
     let payload = RenderPayload {
         media_url: media_url.clone(),
+        poster_url: media_url.clone(),
         kind: item.kind,
         title: item.name.clone(),
         overlay: overlay.to_string(),
@@ -290,6 +293,7 @@ pub fn open_audio(
 
     let payload = RenderPayload {
         media_url: media_url.clone(),
+        poster_url: media_url.clone(),
         kind: item.kind,
         title: item.name.clone(),
         overlay: overlay.to_string(),
