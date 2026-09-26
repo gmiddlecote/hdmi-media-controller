@@ -21,7 +21,7 @@ pub mod scheduler;
 pub mod update;
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use display::model::{DisplayInfo, DisplayMode, DisplayModes};
@@ -196,6 +196,48 @@ fn scheduler_play_item(
         fit,
         audio_device,
     })
+}
+
+/// Attempts to generate a thumbnail JPG from a video file using ffmpeg.
+/// Returns the path to the generated image if successful.
+pub fn generate_thumbnail(path: &str) -> Option<PathBuf> {
+    use std::process::Command;
+    let path = Path::new(path);
+    if !path.is_file() {
+        return None;
+    }
+    // Write to a temp file near the source so it can be registered easily.
+    let thumb_path = std::env::temp_dir()
+        .join(format!(
+            "hmc-thumb-{}-{}",
+            path.file_stem()?.to_string_lossy(),
+            std::process::id()
+        ))
+        .with_extension("jpg");
+    let ok = Command::new("ffmpeg")
+        .args([
+            "-y",
+            "-ss",
+            "00:00:01",
+            "-i",
+            path.to_string_lossy().as_ref(),
+            "-vframes",
+            "1",
+            "-q:v",
+            "2",
+            thumb_path.to_string_lossy().as_ref(),
+        ])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if ok && thumb_path.is_file() {
+        Some(thumb_path)
+    } else {
+        let _ = std::fs::remove_file(&thumb_path);
+        None
+    }
 }
 
 /// Registers a file and returns its `media://` url, so the queue can show

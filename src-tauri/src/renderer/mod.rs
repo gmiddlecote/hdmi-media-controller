@@ -164,9 +164,22 @@ pub fn open(
 
     let media_url = app.state::<Registry>().register(item.clone());
 
+    // For videos, generate a thumbnail poster so the output shows a
+    // frame immediately instead of black for several seconds.
+    let poster_url = if item.kind == MediaKind::Video {
+        if let Some(thumb) = crate::generate_thumbnail(&item.path) {
+            let thumb_item = crate::media::MediaItem::from_path(thumb.to_string_lossy().into_owned());
+            app.state::<crate::media::Registry>().register(thumb_item.clone())
+        } else {
+            media_url.clone()
+        }
+    } else {
+        media_url.clone()
+    };
+
     let payload = RenderPayload {
         media_url: media_url.clone(),
-        poster_url: media_url.clone(),
+        poster_url,
         kind: item.kind,
         title: item.name.clone(),
         overlay: overlay.to_string(),
