@@ -26,18 +26,16 @@ jobs:
         run: cargo install tauri-cli --locked
 
       - name: Download bundled ffmpeg (Windows static)
+        shell: pwsh
         run: |
-          mkdir -p src-tauri/resources
-          # Download static build zip; extract ffmpeg.exe
-          curl -L -o /tmp/ffmpeg.zip "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n7.0-latest-win64-gpl-7.0.zip"
-          # BtbN zips contain bin/ffmpeg.exe; extract just that
-          if command -v unzip >/dev/null 2>&1; then
-            unzip -j /tmp/ffmpeg.zip "bin/ffmpeg.exe" -d src-tauri/resources/ || true
-          else
-            # Fallback: try direct binary URL (some mirrors provide .exe)
-            curl -L -o src-tauri/resources/ffmpeg.exe "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg.exe" || true
-          fi
-          ls -la src-tauri/resources/ffmpeg.exe || echo "ffmpeg.exe not bundled (build uses system fallback)"
+          New-Item -ItemType Directory -Force -Path src-tauri/resources | Out-Null
+          $zip = "C:\tmp\ffmpeg.zip"
+          Invoke-WebRequest -Uri "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n7.0-latest-win64-gpl-7.0.zip" -OutFile $zip -UseBasicParsing
+          Expand-Archive -Path $zip -DestinationPath src-tauri/resources/temp -Force
+          $exe = Get-ChildItem -Path src-tauri/resources/temp -Recurse -Filter "ffmpeg.exe" | Select-Object -First 1
+          if ($exe) { Copy-Item $exe.FullName src-tauri/resources/ffmpeg.exe -Force }
+          Remove-Item -Path src-tauri/resources/temp -Recurse -Force -ErrorAction SilentlyContinue
+          ls src-tauri/resources/ffmpeg.exe || Write-Host "ffmpeg not bundled; build uses system fallback"
 
       - name: Build and bundle (MSI + NSIS)
         working-directory: src-tauri
