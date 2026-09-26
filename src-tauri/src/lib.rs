@@ -206,6 +206,36 @@ pub fn generate_thumbnail(path: &str) -> Option<PathBuf> {
     if !path.is_file() {
         return None;
     }
+    // Try bundled ffmpeg.exe (installed), then system PATH.
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()));
+    let candidates = [
+        exe_dir.as_ref().map(|d| d.join("ffmpeg.exe")),
+        Some(PathBuf::from("ffmpeg.exe")),
+        Some(PathBuf::from("ffmpeg")),
+    ];
+    let ffmpeg = candidates
+        .iter()
+        .filter_map(|c| c.as_ref())
+        .find(|p| p.is_file() || std::env::var_os("PATH").map_or(false, |path| {
+            std::env::split_paths(&path).any(|d| d.join(p.file_name().unwrap_or_default()).is_file())
+        }));
+    let ffmpeg = match ffmpeg {
+        Some(p) if p.is_file() => p.clone(),
+        _ => {
+            // Fallback: try to locate in PATH using which logic
+            Command::new("where").arg("ffmpeg").output()
+                .ok()
+                .and_then(|o| if o.status.success() {
+                    std::str::from_utf8(&o.stdout).ok()
+                        .and_then(|s| s.lines().next())
+                        .map(|line| PathBuf::from(line.trim()))
+                } else { None })
+                .or_else(|| candidates.into_iter().find_map(|c| c))
+                .unwrap_or_else(|| PathBuf::from("ffmpeg"))
+        }
+    };
     // Write to a temp file near the source so it can be registered easily.
     let thumb_path = std::env::temp_dir()
         .join(format!(
@@ -214,7 +244,7 @@ pub fn generate_thumbnail(path: &str) -> Option<PathBuf> {
             std::process::id()
         ))
         .with_extension("jpg");
-    let ok = Command::new("ffmpeg")
+    let ok = Command::new(&ffmpeg)
         .args([
             "-y",
             "-ss",
