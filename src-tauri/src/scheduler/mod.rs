@@ -17,12 +17,17 @@
 //!
 //! The kernel never uses the Tauri main/command thread for window
 //! creation (deadlock risk on Windows with `WebviewWindowBuilder`).
+//!
+//! Switching items closes the current output first and waits for its window
+//! to be destroyed before the next one opens, so two items are never on the
+//! same display at once.
 
+use std::cell::RefCell;
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, Listener};
+use tauri::{AppHandle, Emitter, Listener, Manager};
 
 use crate::media::{MediaItem, MediaKind, ObjectFit};
 use crate::playlist::{Playlist, RepeatMode};
@@ -192,6 +197,19 @@ struct Single {
 /// responsive image dwell, large enough to keep idle CPU negligible.
 const TICK: Duration = Duration::from_millis(50);
 
+/// How long a switch waits for the previous output window to be destroyed
+/// before opening anyway (a wedged webview must not stall playback).
+const TRANSITION_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// An item waiting for the output window it replaces to be destroyed.
+struct Pending {
+    item: MediaItem,
+    display: String,
+    /// Label of the window being torn down.
+    label: String,
+    deadline: Instant,
+}
+
 /// Starts the playback kernel as a detached worker thread.
 pub fn spawn(app: AppHandle, receiver: mpsc::Receiver<Command>, state: State) {
     std::thread::spawn(move || {
@@ -199,6 +217,7 @@ pub fn spawn(app: AppHandle, receiver: mpsc::Receiver<Command>, state: State) {
             app,
             receiver,
             state,
+            pending: RefCell::new(None),
         }
         .run()
     });
@@ -208,6 +227,8 @@ struct Kernel {
     app: AppHandle,
     receiver: mpsc::Receiver<Command>,
     state: State,
+    /// Queued transition, held until `label`'s window is gone.
+    pending: RefCell<Option<Pending>>,
 }
 
 impl Kernel {
@@ -320,7 +341,7 @@ impl Kernel {
                     Command::Prev => {
                         if playing && single.is_none() && playlist.current().is_some() {
                             playlist.prev();
-                            let display = display_of(&session);
+                            let display = self.display_for(&session);
                             let opened = self.start(&playlist, &display, &mut session, &mut seq);
                             playing = opened;
                         }
@@ -336,31 +357,55 @@ impl Kernel {
                                 active.index = playlist.position(&active.path);
                             }
                             if was_playing_playlist
-                                && !active_path
+                                && active_path
                                     .as_deref()
-                                    .is_some_and(|path| playlist.position(path).is_some())
+                                    .is_none_or(|path| playlist.position(path).is_none())
                             {
-                                let display = display_of(&session);
+                                let display = self.display_for(&session);
                                 playing = self.start(&playlist, &display, &mut session, &mut seq);
                             }
                         }
                     }
                 }
-                // Progress from the previous item would be misleading; drop it.
+                // Signals from the previous item would be misleading; drop them.
                 if seq != progress_seq {
                     progress = None;
                     progress_seq = seq;
+                    while finished_rx.try_recv().is_ok() {}
+                    while progress_rx.try_recv().is_ok() {}
                 }
                 self.publish(&playlist, &session, playing, paused, &single, progress);
             }
 
-            // Adopt any video position updates that arrived since the last tick.
+            // Signals from the previous item would be misleading; drop them.
             if seq != progress_seq {
                 progress = None;
                 progress_seq = seq;
+                while finished_rx.try_recv().is_ok() {}
+                while progress_rx.try_recv().is_ok() {}
             }
+            // Adopt any video position updates that arrived since the last tick.
             while let Ok((current, duration)) = progress_rx.try_recv() {
                 progress = Some(VideoProgress { current, duration });
+            }
+
+            // Open the queued item once the window it replaces is gone.
+            if let Some(pending) = self.take_pending_if_ready() {
+                while finished_rx.try_recv().is_ok() {}
+                while progress_rx.try_recv().is_ok() {}
+                progress = None;
+                if self.open_item(&pending.item, &pending.display, &mut session, &mut seq) {
+                    // A pause landing during the wait still applies to the new item.
+                    if paused {
+                        if let Some(active) = session.as_ref() {
+                            self.send_control(&active.label, true);
+                        }
+                    }
+                } else {
+                    self.stop(&mut session, &mut playing, &mut paused, &mut single);
+                }
+                progress_seq = seq;
+                self.publish(&playlist, &session, playing, paused, &single, progress);
             }
 
             if playing && !paused {
@@ -388,7 +433,7 @@ impl Kernel {
                         match single.as_ref() {
                             Some(active_single) if active_single.mode != PlayMode::Once => {
                                 // Loop / Timed: restart the item to fill the slot.
-                                let display = display_of(&session);
+                                let display = self.display_for(&session);
                                 let item = playback_item(
                                     active_single.path.clone(),
                                     active_single.fit,
@@ -447,6 +492,7 @@ impl Kernel {
         seq: &mut u64,
     ) -> bool {
         let Some(item) = playlist.current().cloned() else {
+            self.pending.borrow_mut().take();
             self.set_error("Playlist is empty.".into());
             self.close_session(session);
             return false;
@@ -460,6 +506,11 @@ impl Kernel {
     }
 
     /// Opens one item on `display`, replacing any active output.
+    ///
+    /// The window it replaces is closed first; if that window is still alive
+    /// the open is deferred to a later tick instead of racing its teardown,
+    /// so the previous item is off the display before the next one appears.
+    /// Returns `true` either way — playback is under way.
     fn start_item(
         &self,
         item: &MediaItem,
@@ -467,8 +518,30 @@ impl Kernel {
         session: &mut Option<Session>,
         seq: &mut u64,
     ) -> bool {
-        self.close_session(session);
+        let closed = self.close_session(session);
+        let queued = self.pending.borrow_mut().take().map(|queued| queued.label);
+        if let Some(label) = closed.or(queued) {
+            if self.app.get_webview_window(&label).is_some() {
+                self.pending.replace(Some(Pending {
+                    item: item.clone(),
+                    display: display.to_string(),
+                    label,
+                    deadline: Instant::now() + TRANSITION_TIMEOUT,
+                }));
+                return true;
+            }
+        }
+        self.open_item(item, display, session, seq)
+    }
 
+    /// Opens one item on `display`, assuming nothing else is on screen.
+    fn open_item(
+        &self,
+        item: &MediaItem,
+        display: &str,
+        session: &mut Option<Session>,
+        seq: &mut u64,
+    ) -> bool {
         if item.kind == MediaKind::Audio {
             *seq += 1;
             let label = format!("audio-{seq}");
@@ -514,6 +587,24 @@ impl Kernel {
         true
     }
 
+    /// Takes the queued transition once its predecessor's window has been
+    /// destroyed (or the wait has timed out).
+    fn take_pending_if_ready(&self) -> Option<Pending> {
+        let mut pending = self.pending.borrow_mut();
+        let ready = pending.as_ref().is_some_and(|queued| {
+            transition_ready(
+                self.app.get_webview_window(&queued.label).is_some(),
+                queued.deadline,
+                Instant::now(),
+            )
+        });
+        if ready {
+            pending.take()
+        } else {
+            None
+        }
+    }
+
     /// Moves to the next playlist entry. Returns `false` when the playlist
     /// is exhausted (`RepeatMode::Off`), which also closes the output.
     fn step_forward(
@@ -523,10 +614,11 @@ impl Kernel {
         seq: &mut u64,
     ) -> bool {
         if !playlist.advance() {
+            self.pending.borrow_mut().take();
             self.close_session(session);
             return false;
         }
-        let display = display_of(session);
+        let display = self.display_for(session);
         self.start(playlist, &display, session, seq)
     }
 
@@ -538,16 +630,34 @@ impl Kernel {
         paused: &mut bool,
         single: &mut Option<Single>,
     ) {
+        self.pending.borrow_mut().take();
         self.close_session(session);
         *playing = false;
         *paused = false;
         *single = None;
     }
 
-    fn close_session(&self, session: &mut Option<Session>) {
-        if let Some(active) = session.take() {
-            renderer::close(&self.app, &active.label);
-        }
+    /// Closes the active output, returning the label of the window that was
+    /// open (so a caller can wait for it to be destroyed).
+    fn close_session(&self, session: &mut Option<Session>) -> Option<String> {
+        let active = session.take()?;
+        renderer::close(&self.app, &active.label);
+        Some(active.label)
+    }
+
+    /// Display the next item belongs on: the active session's, else the one
+    /// a queued transition is headed for, else empty.
+    fn display_for(&self, session: &Option<Session>) -> String {
+        session
+            .as_ref()
+            .map(|active| active.display.clone())
+            .or_else(|| {
+                self.pending
+                    .borrow()
+                    .as_ref()
+                    .map(|queued| queued.display.clone())
+            })
+            .unwrap_or_default()
     }
 
     /// Tells an output window to pause (`true`) or resume (`false`) media.
@@ -572,6 +682,10 @@ impl Kernel {
         progress: Option<VideoProgress>,
     ) {
         let last_error = self.state.snapshot.lock().unwrap().last_error.clone();
+        // While a switch waits for the old window, the queued item stands in
+        // for the session so the UI does not flicker to idle mid-transition.
+        let queued = self.pending.borrow();
+        let queued = queued.as_ref();
         let snapshot = Snapshot {
             playing,
             paused,
@@ -584,7 +698,10 @@ impl Kernel {
                 .as_ref()
                 .map(|active| active.title.clone())
                 .or_else(|| playlist.current().map(|item| item.name.clone())),
-            path: session.as_ref().map(|active| active.path.clone()),
+            path: session
+                .as_ref()
+                .map(|active| active.path.clone())
+                .or_else(|| queued.map(|queued| queued.item.path.clone())),
             elapsed_ms: session
                 .as_ref()
                 .map(|active| active.since.elapsed().as_millis() as u64)
@@ -602,7 +719,12 @@ impl Kernel {
             display: session
                 .as_ref()
                 .filter(|active| active.kind != MediaKind::Audio)
-                .map(|active| active.display.clone()),
+                .map(|active| active.display.clone())
+                .or_else(|| {
+                    queued
+                        .filter(|queued| queued.item.kind != MediaKind::Audio)
+                        .map(|queued| queued.display.clone())
+                }),
             last_error,
         };
         *self.state.snapshot.lock().unwrap() = snapshot.clone();
@@ -610,19 +732,17 @@ impl Kernel {
     }
 }
 
+/// A queued transition opens once the window it replaces is gone, or the
+/// wait has run out.
+fn transition_ready(window_alive: bool, deadline: Instant, now: Instant) -> bool {
+    !window_alive || now >= deadline
+}
+
 fn playback_item(path: String, fit: ObjectFit, audio_device: &str) -> MediaItem {
     let mut item = MediaItem::from_path(path);
     item.fit = fit;
     item.audio_device = audio_device.to_string();
     item
-}
-
-/// Display device name an active session is placed on, or empty.
-fn display_of(session: &Option<Session>) -> String {
-    session
-        .as_ref()
-        .map(|active| active.display.clone())
-        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -690,5 +810,18 @@ mod tests {
             serde_json::from_str(r#"{"current":2.25,"duration":30}"#).unwrap();
         assert_eq!(parsed.current, 2.25);
         assert_eq!(parsed.duration, 30.0);
+    }
+
+    #[test]
+    fn transition_waits_for_the_old_window_then_times_out() {
+        let now = Instant::now();
+        let deadline = now + TRANSITION_TIMEOUT;
+        assert!(!transition_ready(true, deadline, now));
+        assert!(transition_ready(false, deadline, now));
+        assert!(transition_ready(
+            true,
+            deadline,
+            now + TRANSITION_TIMEOUT + Duration::from_millis(1)
+        ));
     }
 }

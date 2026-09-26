@@ -523,7 +523,7 @@ pub fn run() {
             scheduler::spawn(app.handle().clone(), command_rx, scheduler_state.clone());
             Ok(())
         })
-        .register_uri_scheme_protocol("media", media::serve)
+        .register_asynchronous_uri_scheme_protocol("media", media::serve)
         .invoke_handler(tauri::generate_handler![
             list_displays,
             list_directory,
