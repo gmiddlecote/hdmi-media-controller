@@ -10,7 +10,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "DuetPlay",
+        "title": "DuetPlay v0.12.0-dev",
         "width": 1200,
         "height": 700,
         "minWidth": 1000,
@@ -22,7 +22,7 @@
       },
       {
         "label": "splash",
-        "title": "DuetPlay",
+        "title": "DuetPlay v0.12.0-dev",
         "url": "splash.html",
         "width": 800,
         "height": 500,
