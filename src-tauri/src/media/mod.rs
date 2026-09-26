@@ -144,6 +144,10 @@ pub fn mime_for(kind: MediaKind, path: &str) -> String {
 /// Managed as application state; hidden behind an opaque interface because
 /// the id space is the only contract the renderer window and the protocol
 /// handler share.
+///
+/// NOTE: For long-running sessions, consider implementing an LRU eviction
+/// policy to prevent unbounded growth. Currently relies on explicit
+/// `release()` calls from scheduler when items are no longer needed.
 #[derive(Default)]
 pub struct Registry(Mutex<RegistryInner>);
 

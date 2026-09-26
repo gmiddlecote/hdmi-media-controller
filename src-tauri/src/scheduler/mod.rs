@@ -193,9 +193,23 @@ struct Single {
     audio_device: String,
 }
 
-/// How long the kernel waits between decision ticks. Small enough for
-/// responsive image dwell, large enough to keep idle CPU negligible.
-const TICK: Duration = Duration::from_millis(50);
+/// Returns the appropriate tick duration based on current playback state.
+///
+/// For video/audio playback: short interval (33ms) for smooth progress updates
+/// For image dwell: medium interval (200ms) balances responsiveness and CPU
+/// For idle/paused: longer interval (500ms) minimizes CPU usage
+fn tick_for_state(playing: bool, paused: bool, session: &Option<Session>) -> Duration {
+    if !playing || paused {
+        Duration::from_millis(500) // Idle/paused: minimal CPU usage
+    } else if let Some(active) = session {
+        match active.kind {
+            MediaKind::Video | MediaKind::Audio => Duration::from_millis(33), // ~30fps for smooth progress
+            MediaKind::Image => Duration::from_millis(200), // Less frequent for image dwell
+        }
+    } else {
+        Duration::from_millis(200) // Fallback
+    }
+}
 
 /// How long a switch waits for the previous output window to be destroyed
 /// before opening anyway (a wedged webview must not stall playback).
@@ -478,7 +492,7 @@ impl Kernel {
                 progress = None;
             }
 
-            std::thread::sleep(TICK);
+            std::thread::sleep(tick_for_state(playing, paused, &session));
         }
     }
 

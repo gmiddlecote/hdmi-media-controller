@@ -41,6 +41,48 @@ fn to_utf16(value: &str) -> Vec<u16> {
     value.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
+/// Collects monitor information for a given display adapter.
+fn collect_monitors_for_adapter(
+    adapter: &DISPLAY_DEVICEW,
+    connections: &HashMap<String, String>,
+) -> Vec<DisplayInfo> {
+    let mut displays = Vec::new();
+    let adapter_name = wide_to_string(&adapter.DeviceName);
+    let mut monitor_index = 0u32;
+    loop {
+        let mut monitor = zeroed_device();
+        let monitor_found = unsafe {
+            EnumDisplayDevicesW(
+                adapter.DeviceName.as_ptr(),
+                monitor_index,
+                &mut monitor,
+                EDD_GET_DEVICE_INTERFACE_NAME,
+            )
+        };
+        if monitor_found == 0 {
+            break;
+        }
+
+        let flags = StateFlags(monitor.StateFlags);
+        if flags.attached_to_desktop() {
+            let device_path = wide_to_string(&monitor.DeviceID);
+            let connection_kind = connections.get(&device_path).cloned();
+            let bounds = display_bounds(&adapter.DeviceName).unwrap_or_default();
+            displays.push(DisplayInfo::from_device(
+                device_path,
+                adapter_name.clone(),
+                wide_to_string(&monitor.DeviceString),
+                flags,
+                connection_kind,
+                bounds,
+            ));
+        }
+
+        monitor_index += 1;
+    }
+    displays
+}
+
 /// Decodes a null-terminated UTF-16 buffer into a `String`.
 fn wide_to_string(buf: &[u16]) -> String {
     let end = buf.iter().position(|&unit| unit == 0).unwrap_or(buf.len());
@@ -71,38 +113,7 @@ pub fn list_displays() -> Result<Vec<DisplayInfo>, DisplayError> {
             continue;
         }
 
-        let mut monitor_index = 0u32;
-        loop {
-            let mut monitor = zeroed_device();
-            let monitor_found = unsafe {
-                EnumDisplayDevicesW(
-                    adapter.DeviceName.as_ptr(),
-                    monitor_index,
-                    &mut monitor,
-                    EDD_GET_DEVICE_INTERFACE_NAME,
-                )
-            };
-            if monitor_found == 0 {
-                break;
-            }
-
-            let flags = StateFlags(monitor.StateFlags);
-            if flags.attached_to_desktop() {
-                let device_path = wide_to_string(&monitor.DeviceID);
-                let connection_kind = connections.get(&device_path).cloned();
-                let bounds = display_bounds(&adapter.DeviceName).unwrap_or_default();
-                displays.push(DisplayInfo::from_device(
-                    device_path,
-                    wide_to_string(&adapter.DeviceName),
-                    wide_to_string(&monitor.DeviceString),
-                    flags,
-                    connection_kind,
-                    bounds,
-                ));
-            }
-
-            monitor_index += 1;
-        }
+        displays.extend(collect_monitors_for_adapter(&adapter, &connections));
 
         adapter_index += 1;
     }
