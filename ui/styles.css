@@ -8,6 +8,11 @@
   --accent: #38bdf8;
   --accent-border: #0ea5e9;
   --ok: #4ade80;
+  --ok-border: rgba(74, 222, 128, 0.4);
+  --ok-bg: rgba(74, 222, 128, 0.12);
+  --danger: #f87171;
+  --danger-border: #7f1d1d;
+  --danger-bg: rgba(248, 113, 113, 0.12);
   --off: #64748b;
 }
 
@@ -70,22 +75,12 @@ body {
 }
 
 .update-status.error {
-  color: #f87171;
+  color: var(--danger);
 }
 
 .subtle-btn {
   padding: 4px 8px;
   font-size: 12px;
-}
-
-.exit-btn {
-  color: #f87171;
-  border-color: #7f1d1d;
-}
-
-.exit-btn:hover {
-  border-color: #f87171;
-  background: rgba(248, 113, 113, 0.12);
 }
 
 .update-dialog {
@@ -160,16 +155,42 @@ button {
   padding: 6px 14px;
   font-size: 13px;
   cursor: pointer;
-  transition: background 120ms ease;
+  transition:
+    background 120ms ease,
+    color 120ms ease,
+    border-color 120ms ease;
 }
 
 button:hover {
   background: rgba(56, 189, 248, 0.12);
 }
 
+.play-btn {
+  color: var(--ok);
+  border-color: var(--ok-border);
+}
+
+.play-btn:not(:disabled):hover {
+  background: var(--ok-bg);
+}
+
+.danger-btn,
+.exit-btn {
+  color: var(--danger);
+  border-color: var(--danger-border);
+}
+
+.danger-btn:not(:disabled):hover,
+.exit-btn:not(:disabled):hover {
+  background: var(--danger-bg);
+  border-color: var(--danger);
+}
+
 button:disabled {
-  opacity: 0.5;
-  cursor: default;
+  color: var(--muted);
+  border-color: var(--panel-border);
+  background: transparent;
+  cursor: not-allowed;
 }
 
 .display-list {
@@ -274,7 +295,7 @@ button:disabled {
 }
 
 .error {
-  color: #f87171;
+  color: var(--danger);
 }
 
 .status {
@@ -468,8 +489,8 @@ button:disabled {
   padding: 2px 6px;
 }
 
-.queued-remove:hover {
-  color: #f87171;
+.queued-remove:not(:disabled):hover {
+  color: var(--danger);
   background: transparent;
 }
 
