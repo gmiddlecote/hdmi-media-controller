@@ -36,20 +36,7 @@ const SPLASH_SECONDS: u64 = 5;
 /// connector type (e.g. HDMI) when the display config can be queried.
 #[tauri::command]
 fn list_displays() -> Result<Vec<DisplayInfo>, String> {
-    use std::thread;
-    use std::sync::mpsc::{channel, RecvTimeoutError};
-
-    let (tx, rx) = channel();
-    thread::spawn(move || {
-        let _ = tx.send(display::list_displays());
-    });
-
-    match rx.recv_timeout(std::time::Duration::from_millis(300)) {
-        Ok(Ok(list)) => Ok(list),
-        Ok(Err(err)) => Err(err.to_string()),
-        Err(RecvTimeoutError::Timeout) => Ok(Vec::new()), // hang prevents detection; returns empty to avoid freeze
-        Err(RecvTimeoutError::Disconnected) => Ok(Vec::new()),
-    }
+    display::list_displays().map_err(|err| err.to_string())
 }
 
 /// Returns the modes supported by a display, plus the mode in effect now.
