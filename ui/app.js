@@ -891,7 +891,7 @@ const overlayBtn = document.getElementById("overlay-btn");
 
 overlayBtn.addEventListener("click", async () => {
   try {
-    await invoke("scheduler_set_overlay", { text: overlayInput.value });
+    await invoke("scheduler_set_overlay", { text: overlayInput.value, v_pos: document.getElementById("overlay-v").value, h_pos: document.getElementById("overlay-h").value });
     playbackStatus.textContent = "Overlay updated.";
     scheduleSessionSave();
   } catch (error) {
