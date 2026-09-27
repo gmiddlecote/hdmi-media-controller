@@ -169,6 +169,8 @@ pub fn open(
         kind: item.kind,
         title: item.name.clone(),
         overlay: overlay.to_string(),
+        overlay_v: "bottom".into(),
+        overlay_h: "left".into(),
         fit: item.fit,
     };
     // Register the payload *before* building the window: a newly created
@@ -295,6 +297,8 @@ pub fn open_audio(
         kind: item.kind,
         title: item.name.clone(),
         overlay: overlay.to_string(),
+        overlay_v: "bottom".into(),
+        overlay_h: "left".into(),
         fit: item.fit,
     };
     app.state::<RendererState>()
