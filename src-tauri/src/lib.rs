@@ -385,8 +385,10 @@ fn scheduler_set_overlay(
     app: tauri::AppHandle,
     state: tauri::State<'_, scheduler::State>,
     text: String,
+    v_pos: Option<String>,
+    h_pos: Option<String>,
 ) -> Result<(), String> {
-    state.set_overlay(text);
+    state.set_overlay(text, v_pos.unwrap_or_else(|| "bottom".into()), h_pos.unwrap_or_else(|| "left".into()));
     for label in app.state::<renderer::RendererState>().labels() {
         let _ = app.emit_to(label, "overlay-text", state.overlay());
     }

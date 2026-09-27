@@ -122,12 +122,19 @@ struct MediaProgressPayload {
 }
 
 /// Shared scheduler handle exposed to Tauri commands.
+#[derive(Clone, Default, Serialize, Deserialize)]
+pub struct OverlayConfig {
+    pub text: String,
+    pub v_pos: String,
+    pub h_pos: String,
+}
+
 #[derive(Clone)]
 pub struct State {
     tx: mpsc::Sender<Command>,
     snapshot: Arc<Mutex<Snapshot>>,
     dwell: Arc<Mutex<Duration>>,
-    overlay: Arc<Mutex<String>>,
+    overlay: Arc<Mutex<OverlayConfig>>,
 }
 
 impl State {
@@ -136,7 +143,7 @@ impl State {
             tx,
             snapshot: Arc::new(Mutex::new(Snapshot::default())),
             dwell: Arc::new(Mutex::new(Duration::from_secs(5))),
-            overlay: Arc::new(Mutex::new(String::new())),
+            overlay: Arc::new(Mutex::new(OverlayConfig::default())),
         }
     }
 
@@ -153,12 +160,12 @@ impl State {
 
     /// Stores the caption shown on output windows; applied immediately to
     /// existing windows by the invoking command.
-    pub(crate) fn set_overlay(&self, text: String) {
-        *self.overlay.lock().unwrap() = text;
+    pub(crate) fn set_overlay(&self, text: String, v_pos: String, h_pos: String) {
+        *self.overlay.lock().unwrap() = OverlayConfig { text, v_pos, h_pos };
     }
 
     /// Current output caption (empty when none is configured).
-    pub(crate) fn overlay(&self) -> String {
+    pub(crate) fn overlay(&self) -> OverlayConfig {
         self.overlay.lock().unwrap().clone()
     }
 

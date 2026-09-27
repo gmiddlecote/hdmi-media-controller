@@ -37,6 +37,8 @@ pub struct RenderPayload {
     pub title: String,
     /// Optional caption rendered over the bottom edge of the output.
     pub overlay: String,
+    pub overlay_v: String,
+    pub overlay_h: String,
     /// How the media fills the output (`cover` or `contain`).
     pub fit: ObjectFit,
 }
