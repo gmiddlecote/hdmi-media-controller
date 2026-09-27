@@ -100,7 +100,9 @@ pub fn list_displays() -> Result<Vec<DisplayInfo>, DisplayError> {
 
     let mut displays = Vec::new();
     let mut adapter_index = 0u32;
+    const MAX_ADAPTERS: u32 = 8;
     loop {
+        if adapter_index >= MAX_ADAPTERS { break; }
         let mut adapter = zeroed_device();
         let adapter_found =
             unsafe { EnumDisplayDevicesW(ptr::null(), adapter_index, &mut adapter, 0) };

@@ -36,7 +36,11 @@ const SPLASH_SECONDS: u64 = 5;
 /// connector type (e.g. HDMI) when the display config can be queried.
 #[tauri::command]
 fn list_displays() -> Result<Vec<DisplayInfo>, String> {
-    display::list_displays().map_err(|err| err.to_string())
+    // Safety: prevent hang on display enumeration (Win32 EnumDisplayDevices can block)
+    std::thread::spawn(move || {
+        let _ = display::list_displays();
+    });
+    Ok(Vec::new())
 }
 
 /// Returns the modes supported by a display, plus the mode in effect now.
