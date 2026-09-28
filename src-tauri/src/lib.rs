@@ -209,13 +209,15 @@ fn media_register(app: tauri::AppHandle, path: String) -> Result<String, String>
         .ok_or_else(|| format!("File not found: {path}"))?;
     let item = MediaItem::from_path(canonical);
     let registry = app.state::<media::Registry>();
-    let id = registry.register(item.clone());
+    let url = registry.register(item.clone());
     if item.kind == MediaKind::Video {
         if let Some(thumb) = generate_thumbnail(&item.path) {
-            let _ = registry.set_poster(&id, thumb);
+            if let Some(id) = media::id_from_url(&url) {
+                registry.set_poster(id, thumb);
+            }
         }
     }
-    Ok(id)
+    Ok(url)
 }
 
 #[tauri::command]
@@ -270,9 +272,16 @@ pub fn generate_thumbnail(path: &str) -> Option<std::path::PathBuf> {
     let ffmpeg = candidates
         .iter()
         .filter_map(|c| c.as_ref())
-        .find(|p| p.is_file() || std::env::var_os("PATH").map_or(false, |p| {
-            std::env::split_paths(&p).any(|d| d.join(p.file_name().unwrap_or_default()).is_file())
-        }));
+        .find(|candidate| {
+            if candidate.is_file() {
+                return true;
+            }
+            if let Some(path_var) = std::env::var_os("PATH") {
+                let file_name = candidate.file_name().unwrap_or_default();
+                return std::env::split_paths(&path_var).any(|dir| dir.join(file_name).is_file());
+            }
+            false
+        });
     let ffmpeg = match ffmpeg {
         Some(p) if p.is_file() => p.clone(),
         _ => return None,
@@ -280,9 +289,16 @@ pub fn generate_thumbnail(path: &str) -> Option<std::path::PathBuf> {
     let thumb_path = path.with_extension("thumb.jpg");
     let status = Command::new(&ffmpeg)
         .args([
-            "-y", "-i", &path.to_string_lossy(),
-            "-ss", "00:00:01", "-vframes", "1",
-            "-q:v", "2", &thumb_path.to_string_lossy(),
+            "-y",
+            "-i",
+            &path.to_string_lossy(),
+            "-ss",
+            "00:00:01",
+            "-vframes",
+            "1",
+            "-q:v",
+            "2",
+            &thumb_path.to_string_lossy(),
         ])
         .status()
         .ok()?;
@@ -438,7 +454,11 @@ fn scheduler_set_overlay(
     v_pos: Option<String>,
     h_pos: Option<String>,
 ) -> Result<(), String> {
-    state.set_overlay(text, v_pos.unwrap_or_else(|| "bottom".into()), h_pos.unwrap_or_else(|| "left".into()));
+    state.set_overlay(
+        text,
+        v_pos.unwrap_or_else(|| "bottom".into()),
+        h_pos.unwrap_or_else(|| "left".into()),
+    );
     for label in app.state::<renderer::RendererState>().labels() {
         let _ = app.emit_to(label, "overlay-text", state.overlay());
     }
