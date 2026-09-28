@@ -18,19 +18,7 @@
         "resizable": true,
         "center": true,
         "maximized": true,
-        "visible": false
-      },
-      {
-        "label": "splash",
-        "title": "DuetPlay",
-        "url": "splash.html",
-        "width": 800,
-        "height": 500,
-        "resizable": false,
-        "decorations": false,
-        "alwaysOnTop": true,
-        "skipTaskbar": true,
-        "center": true
+        "visible": true
       }
     ],
     "security": {

@@ -65,9 +65,13 @@ function hideShortcuts() {
 
 // Tab management
 function showTab(tabName) {
+  console.log("[DEBUG] showTab called with:", tabName);
   const buttons = document.querySelectorAll(".tab-btn");
   const panels = document.querySelectorAll(".tab-panel");
-  if (!buttons.length || !panels.length) return;
+  if (!buttons.length || !panels.length) {
+    console.warn("[DEBUG] showTab: No buttons or panels found");
+    return;
+  }
   
   buttons.forEach(btn => {
     const isActive = btn.dataset.tab === tabName;
@@ -79,13 +83,18 @@ function showTab(tabName) {
     panel.hidden = !isActive;
     if (isActive) panel.classList.add("active");
     else panel.classList.remove("active");
+    console.log("[DEBUG] Panel", panel.id, "hidden:", panel.hidden);
   });
 }
 
 function initTabs() {
   const buttons = document.querySelectorAll(".tab-btn");
   const panels = document.querySelectorAll(".tab-panel");
-  if (!buttons.length || !panels.length) return;
+  console.log("[DEBUG] initTabs called, buttons:", buttons.length, "panels:", panels.length);
+  if (!buttons.length || !panels.length) {
+    console.warn("[DEBUG] No tab buttons or panels found!");
+    return;
+  }
   
   buttons.forEach(btn => {
     btn.addEventListener("click", () => showTab(btn.dataset.tab));

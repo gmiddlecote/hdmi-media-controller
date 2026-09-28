@@ -22,15 +22,11 @@ pub mod update;
 
 use std::fs;
 use std::path::Path;
-use std::time::Duration;
 
 use display::model::{DisplayInfo, DisplayMode, DisplayModes};
 use media::{MediaItem, MediaKind, ObjectFit};
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Manager};
-
-/// How long the splash window stays up before the app reveals itself.
-const SPLASH_SECONDS: u64 = 5;
 
 /// Returns the displays detected on the current system, including their
 /// connector type (e.g. HDMI) when the display config can be queried.
@@ -317,32 +313,6 @@ pub fn generate_thumbnail(path: &str) -> Option<std::path::PathBuf> {
         None
     }
 }
-/// for the full five seconds and is dismissed by [`start_splash_watchdog`],
-/// so this deliberately does not reveal the app early.
-#[tauri::command]
-fn app_ready() {}
-
-/// Closes the splash window and brings the main window up, maximised.
-fn reveal_app(app: &tauri::AppHandle) {
-    if let Some(splash) = app.get_webview_window("splash") {
-        let _ = splash.close();
-    }
-    if let Some(main) = app.get_webview_window("main") {
-        let _ = main.show();
-        let _ = main.maximize();
-        let _ = main.set_focus();
-    }
-}
-
-/// Reveals the app exactly [`SPLASH_SECONDS`] after startup, so the
-/// splash is shown for the full five seconds and never any longer.
-fn start_splash_watchdog(app: tauri::AppHandle) {
-    std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_secs(SPLASH_SECONDS));
-        let handle = app.clone();
-        let _ = app.run_on_main_thread(move || reveal_app(&handle));
-    });
-}
 
 #[tauri::command]
 fn app_version() -> String {
@@ -598,7 +568,6 @@ pub fn run() {
         .manage(renderer::PreviewState::default())
         .manage(scheduler_state.clone())
         .setup(move |app| -> Result<(), Box<dyn std::error::Error>> {
-            start_splash_watchdog(app.handle().clone());
             #[cfg(target_os = "windows")]
             begin_display_watch(app.handle().clone());
             scheduler::spawn(app.handle().clone(), command_rx, scheduler_state.clone());
@@ -615,7 +584,6 @@ pub fn run() {
             scheduler_play_item,
             media_register,
             media_probe,
-            app_ready,
             app_version,
             app_exit,
             session_save,
