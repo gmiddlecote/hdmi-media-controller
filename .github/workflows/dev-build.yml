@@ -25,6 +25,18 @@ jobs:
       - name: Install Tauri CLI
         run: cargo install tauri-cli --locked
 
+      - name: Download ffmpeg
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path src-tauri/resources | Out-Null
+          $zip = "C:\Windows\Temp\ffmpeg.zip"
+          Invoke-WebRequest -Uri "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip" -OutFile $zip -UseBasicParsing
+          Expand-Archive -Path $zip -DestinationPath src-tauri/resources/temp -Force
+          $exe = Get-ChildItem -Path src-tauri/resources/temp -Recurse -Filter "ffmpeg.exe" | Select-Object -First 1
+          if ($exe) { Copy-Item $exe.FullName src-tauri/resources/ffmpeg.exe -Force }
+          Remove-Item -Path src-tauri/resources/temp -Recurse -Force -ErrorAction SilentlyContinue
+          ls src-tauri/resources/ffmpeg.exe || Write-Host "ffmpeg not bundled"
+
       - name: Build dev bundle (DEBUG)
         working-directory: src-tauri
         run: cargo tauri build --target x86_64-pc-windows-msvc --debug

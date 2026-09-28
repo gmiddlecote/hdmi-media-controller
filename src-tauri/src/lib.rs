@@ -199,14 +199,23 @@ fn scheduler_play_item(
 }
 
 /// Registers a file and returns its `media://` url, so the queue can show
-/// live thumbnails. Existing files reuse their id.
+/// live thumbnails. Existing files reuse their id. For videos, a JPG
+/// thumbnail is generated via bundled `ffmpeg.exe` and stored alongside
+/// the registry entry so `video.poster` works.
 #[tauri::command]
 fn media_register(app: tauri::AppHandle, path: String) -> Result<String, String> {
     let canonical = media::canonical_path(Path::new(&path))
         .map(|path| path.to_string_lossy().into_owned())
         .ok_or_else(|| format!("File not found: {path}"))?;
     let item = MediaItem::from_path(canonical);
-    Ok(app.state::<media::Registry>().register(item))
+    let registry = app.state::<media::Registry>();
+    let id = registry.register(item.clone());
+    if item.kind == MediaKind::Video {
+        if let Some(thumb) = generate_thumbnail(&item.path) {
+            let _ = registry.set_poster(&id, thumb);
+        }
+    }
+    Ok(id)
 }
 
 #[tauri::command]
@@ -241,7 +250,48 @@ fn renderer_close_preview(app: tauri::AppHandle) -> Result<(), String> {
     }
 }
 
-/// Called by the UI once the control window has loaded. The splash stays up
+/// Attempts to generate a thumbnail JPG from a video file using ffmpeg.
+/// Returns the path to the generated image if successful.
+pub fn generate_thumbnail(path: &str) -> Option<std::path::PathBuf> {
+    use std::process::Command;
+    let path = std::path::Path::new(path);
+    if !path.is_file() {
+        return None;
+    }
+    // Try bundled ffmpeg.exe (installed), then system PATH.
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()));
+    let candidates = [
+        exe_dir.as_ref().map(|d| d.join("ffmpeg.exe")),
+        Some(std::path::PathBuf::from("ffmpeg.exe")),
+        Some(std::path::PathBuf::from("ffmpeg")),
+    ];
+    let ffmpeg = candidates
+        .iter()
+        .filter_map(|c| c.as_ref())
+        .find(|p| p.is_file() || std::env::var_os("PATH").map_or(false, |p| {
+            std::env::split_paths(&p).any(|d| d.join(p.file_name().unwrap_or_default()).is_file())
+        }));
+    let ffmpeg = match ffmpeg {
+        Some(p) if p.is_file() => p.clone(),
+        _ => return None,
+    };
+    let thumb_path = path.with_extension("thumb.jpg");
+    let status = Command::new(&ffmpeg)
+        .args([
+            "-y", "-i", &path.to_string_lossy(),
+            "-ss", "00:00:01", "-vframes", "1",
+            "-q:v", "2", &thumb_path.to_string_lossy(),
+        ])
+        .status()
+        .ok()?;
+    if status.success() && thumb_path.is_file() {
+        Some(thumb_path)
+    } else {
+        None
+    }
+}
 /// for the full five seconds and is dismissed by [`start_splash_watchdog`],
 /// so this deliberately does not reveal the app early.
 #[tauri::command]

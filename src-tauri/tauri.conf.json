@@ -39,6 +39,9 @@
   },
   "bundle": {
     "active": true,
+    "resources": [
+      "resources/ffmpeg.exe"
+    ],
     "targets": "all",
     "publisher": "DuetPlay",
     "copyright": "Copyright (c) 2026",

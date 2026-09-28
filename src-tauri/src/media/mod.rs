@@ -155,6 +155,7 @@ pub struct Registry(Mutex<RegistryInner>);
 struct RegistryInner {
     next_id: u64,
     by_id: HashMap<u64, MediaItem>,
+    posters: HashMap<u64, PathBuf>,
 }
 
 impl Registry {
@@ -187,8 +188,16 @@ impl Registry {
     }
 
     /// Forgets a file that is no longer displayed or queued.
+    pub fn set_poster(&self, id: u64, thumb: PathBuf) {
+        self.0.lock().unwrap().posters.insert(id, thumb);
+    }
+    pub fn get_poster(&self, id: u64) -> Option<PathBuf> {
+        self.0.lock().unwrap().posters.get(&id).cloned()
+    }
     pub fn release(&self, id: u64) {
-        self.0.lock().unwrap().by_id.remove(&id);
+        let mut inner = self.0.lock().unwrap();
+        inner.by_id.remove(&id);
+        inner.posters.remove(&id);
     }
 }
 
