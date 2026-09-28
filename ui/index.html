@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -17,90 +17,146 @@
           <span id="app-version" class="app-version">Version …</span>
           <button id="check-updates-btn" class="subtle-btn" type="button">Check for updates</button>
           <span id="update-status" class="update-status" aria-live="polite"></span>
+          <button id="theme-toggle" class="subtle-btn" type="button" aria-label="Toggle theme" title="Toggle theme (Dark/Light/System)">🌙</button>
+          <button id="help-btn" class="subtle-btn" type="button" aria-label="Keyboard shortcuts">⌘?</button>
           <button id="exit-btn" class="subtle-btn exit-btn" type="button">Exit</button>
         </div>
       </header>
 
-      <section class="panel">
-        <div class="panel-head">
-          <h2>Detected displays</h2>
-          <button id="refresh-btn" type="button">Refresh</button>
-        </div>
-        <div id="display-list" class="display-list" aria-live="polite"></div>
-        <p id="status" class="status">Loading&hellip;</p>
-      </section>
+      <nav class="tabs" role="tablist" aria-label="Main sections">
+        <button role="tab" data-tab="displays" aria-selected="true" class="tab-btn active">Displays</button>
+        <button role="tab" data-tab="playback" aria-selected="false" class="tab-btn">Playback</button>
+        <button role="tab" data-tab="settings" aria-selected="false" class="tab-btn">Settings</button>
+      </nav>
 
-      <section class="panel">
-        <div class="panel-head">
-          <h2>Playback</h2>
-        </div>
-
-        <div id="dropzone" class="dropzone" tabindex="0">
-          <p id="dropzone-hint">Drop image, video or audio files here to build the playlist</p>
-        </div>
-        <div class="path-row">
-          <input id="path-input" type="text" placeholder="…or paste a file path and press Add" autocomplete="off" spellcheck="false" />
-          <button id="add-path-btn" type="button">Add</button>
-        </div>
-
-        <ol id="queue" class="queue" aria-live="polite"></ol>
-
-        <div class="now-playing hidden" id="now-playing">
-          <div id="np-thumb" class="np-thumb"></div>
-          <div class="np-info">
-            <span id="np-title" class="np-title"></span>
-            <div class="np-bar"><div id="np-fill" class="np-fill"></div></div>
-            <span id="np-time" class="np-time"></span>
+      <div class="tab-panels">
+        <section role="tabpanel" id="displays-panel" class="tab-panel active" aria-labelledby="displays-tab">
+          <div class="panel-head">
+            <h2>Detected displays</h2>
+            <button id="refresh-btn" type="button">Refresh</button>
           </div>
-          <button id="preview-btn" class="preview-btn" type="button" disabled>Open preview</button>
-        </div>
+          <div id="display-list" class="display-list" aria-live="polite"></div>
+          <p id="status" class="status">Loading…</p>
+        </section>
 
-        <div class="overlay-row">
-          <label class="overlay">
-            Overlay
-            <input id="overlay-input" type="text" placeholder="Caption shown at the output (leave empty to clear)" autocomplete="off" spellcheck="false" />
-          </label>
-          <select id="overlay-v" class="mode-select" aria-label="Overlay vertical"><option value="bottom">Bottom</option><option value="top">Top</option></select>
-          <select id="overlay-h" class="mode-select" aria-label="Overlay horizontal"><option value="left">Left</option><option value="center">Center</option><option value="right">Right</option></select>
-          <button id="overlay-btn" type="button">Apply</button>
-        </div>
+        <section role="tabpanel" id="playback-panel" class="tab-panel" aria-labelledby="playback-tab" hidden>
+          <div class="panel-head">
+            <h2>Playback</h2>
+          </div>
 
-        <div class="playback-row">
-          <select id="output-display" class="mode-select" aria-label="Master monitor (applies to all items)"></select>
-          <label class="dwell">
-            Dwell
-            <input id="dwell-input" type="number" min="1" step="1" value="5" />s
-          </label>
-          <label class="volume">
-            Volume
-            <input id="volume-input" type="range" min="0" max="100" step="1" value="100" />
-          </label>
-          <button id="play-btn" class="play-btn" type="button">Play</button>
-          <button id="pause-btn" type="button">Pause</button>
-          <button id="resume-btn" type="button">Resume</button>
-          <button id="prev-btn" type="button">&#8249;&#8249;</button>
-          <button id="next-btn" type="button">&#8250;&#8250;</button>
-          <button id="stop-btn" class="danger-btn" type="button">Stop</button>
-        </div>
+          <div id="dropzone" class="dropzone" tabindex="0">
+            <p id="dropzone-hint">Drop image, video or audio files here to build the playlist</p>
+          </div>
+          <div class="path-row">
+            <input id="path-input" type="text" placeholder="…or paste a file path and press Add" autocomplete="off" spellcheck="false" />
+            <button id="add-path-btn" type="button">Add</button>
+          </div>
 
-        <p id="playback-status" class="card-status">Idle.</p>
-      </section>
+          <ol id="queue" class="queue" aria-live="polite"></ol>
+
+          <div class="now-playing hidden" id="now-playing">
+            <div id="np-thumb" class="np-thumb"></div>
+            <div class="np-info">
+              <span id="np-title" class="np-title"></span>
+              <div class="np-bar"><div id="np-fill" class="np-fill"></div></div>
+              <span id="np-time" class="np-time"></span>
+            </div>
+            <button id="preview-btn" class="preview-btn" type="button" disabled>Open preview</button>
+          </div>
+
+          <div class="overlay-row">
+            <label class="overlay">
+              Overlay
+              <input id="overlay-input" type="text" placeholder="Caption shown at the output (leave empty to clear)" autocomplete="off" spellcheck="false" />
+            </label>
+            <select id="overlay-v" class="mode-select" aria-label="Overlay vertical"><option value="bottom">Bottom</option><option value="top">Top</option></select>
+            <select id="overlay-h" class="mode-select" aria-label="Overlay horizontal"><option value="left">Left</option><option value="center">Center</option><option value="right">Right</option></select>
+            <button id="overlay-btn" type="button">Apply</button>
+          </div>
+
+          <div class="playback-row">
+            <select id="output-display" class="mode-select" aria-label="Master monitor (applies to all items)"></select>
+            <label class="dwell">
+              Dwell
+              <input id="dwell-input" type="number" min="1" step="1" value="5" />s
+            </label>
+            <label class="volume">
+              Volume
+              <input id="volume-input" type="range" min="0" max="100" step="1" value="100" />
+            </label>
+            <button id="play-btn" class="play-btn" type="button">Play</button>
+            <button id="pause-btn" type="button">Pause</button>
+            <button id="resume-btn" type="button">Resume</button>
+            <button id="prev-btn" type="button" title="Previous (←)">⏮</button>
+            <button id="next-btn" type="button" title="Next (→)">⏭</button>
+            <button id="stop-btn" class="danger-btn" type="button">Stop</button>
+          </div>
+
+          <p id="playback-status" class="card-status">Idle.</p>
+        </section>
+
+        <section role="tabpanel" id="settings-panel" class="tab-panel" aria-labelledby="settings-tab" hidden>
+          <div class="panel-head">
+            <h2>Settings</h2>
+          </div>
+          <div class="settings-grid">
+            <div class="setting-item">
+              <label for="theme-select">Theme</label>
+              <select id="theme-select" class="mode-select">
+                <option value="system">System</option>
+                <option value="dark">Dark</option>
+                <option value="light">Light</option>
+              </select>
+            </div>
+            <div class="setting-item">
+              <label>Keyboard Shortcuts</label>
+              <button id="show-shortcuts" type="button" class="subtle-btn">Show Help (?) </button>
+            </div>
+            <div class="setting-item">
+              <label>Version</label>
+              <span id="settings-version" class="app-version">Version …</span>
+            </div>
+          </div>
+        </section>
+      </div>
 
       <footer class="footer">
-        <span>Displays &middot; resolutions &middot; connections &middot; playback &middot; drop files anywhere on the window</span>
-        <span class="footer-hints">Space pause &middot; &larr;/&rarr; previous/next &middot; Esc stop</span>
+        <span>Displays · resolutions · connections · playback · drop files anywhere on the window</span>
+        <span class="footer-hints">Space pause · ←/→ previous/next · Esc stop · ? help</span>
       </footer>
     </main>
+
     <div id="update-dialog" class="update-dialog hidden" role="dialog" aria-modal="true" aria-labelledby="update-title">
       <div class="update-card">
         <h2 id="update-title">Update available</h2>
         <p id="update-message"></p>
         <div class="update-actions">
           <button id="update-later-btn" type="button">Later</button>
-          <button id="update-install-btn" type="button">Download &amp; install</button>
+          <button id="update-install-btn" type="button">Download & install</button>
         </div>
       </div>
     </div>
+
+    <div id="shortcuts-dialog" class="shortcuts-dialog hidden" role="dialog" aria-modal="true" aria-labelledby="shortcuts-title">
+      <div class="shortcuts-card">
+        <header>
+          <h2 id="shortcuts-title">Keyboard Shortcuts</h2>
+          <button id="close-shortcuts" class="icon-btn" aria-label="Close">&times;</button>
+        </header>
+        <dl class="shortcuts-list">
+          <dt>Space</dt><dd>Pause / Resume playback</dd>
+          <dt>← / →</dt><dd>Previous / Next item</dd>
+          <dt>Esc</dt><dd>Stop playback</dd>
+          <dt>?</dt><dd>Show this help</dd>
+          <dt>Tab</dt><dd>Navigate between tabs</dd>
+          <dt>Enter</dt><dd>Activate focused button</dd>
+        </dl>
+        <div class="shortcuts-footer">
+          <button id="close-shortcuts-btn" type="button">Got it</button>
+        </div>
+      </div>
+    </div>
+
     <script src="app.js" type="module"></script>
   </body>
 </html>

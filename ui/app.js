@@ -10,16 +10,92 @@
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
 
-// Transport shortcuts: Esc stop, Space pause/resume, ←/→ previous/next.
+// Theme management
+const THEME_KEY = "duetplay-theme";
+const THEMES = ["system", "dark", "light"];
+
+function getSystemTheme() {
+  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
+
+function applyTheme(theme) {
+  const effective = theme === "system" ? getSystemTheme() : theme;
+  document.documentElement.setAttribute("data-theme", effective);
+  localStorage.setItem(THEME_KEY, theme);
+  updateThemeIcon(effective);
+}
+
+function updateThemeIcon(effective) {
+  const btn = document.getElementById("theme-toggle");
+  if (!btn) return;
+  const icons = { dark: "☀️", light: "🌙", system: "🖥️" };
+  btn.textContent = icons[effective] || icons.dark;
+  btn.title = `Theme: ${effective.charAt(0).toUpperCase() + effective.slice(1)} (click to cycle)`;
+}
+
+function cycleTheme() {
+  const current = localStorage.getItem(THEME_KEY) || "system";
+  const idx = THEMES.indexOf(current);
+  const next = THEMES[(idx + 1) % THEMES.length];
+  applyTheme(next);
+  const select = document.getElementById("theme-select");
+  if (select) select.value = next;
+}
+
+function initTheme() {
+  const saved = localStorage.getItem(THEME_KEY) || "system";
+  applyTheme(saved);
+  const select = document.getElementById("theme-select");
+  if (select) select.value = saved;
+  window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
+    const current = localStorage.getItem(THEME_KEY) || "system";
+    if (current === "system") applyTheme("system");
+  });
+}
+
+// Keyboard shortcuts help dialog
+function showShortcuts() {
+  document.getElementById("shortcuts-dialog").classList.remove("hidden");
+  document.getElementById("close-shortcuts").focus();
+}
+
+function hideShortcuts() {
+  document.getElementById("shortcuts-dialog").classList.add("hidden");
+}
+
+// Tab management
+function showTab(tabName) {
+  document.querySelectorAll(".tab-btn").forEach(btn => {
+    const isActive = btn.dataset.tab === tabName;
+    btn.classList.toggle("active", isActive);
+    btn.setAttribute("aria-selected", isActive);
+  });
+  document.querySelectorAll(".tab-panel").forEach(panel => {
+    const isActive = panel.id === `${tabName}-panel`;
+    panel.hidden = !isActive;
+    if (isActive) panel.classList.add("active");
+  });
+}
+
+function initTabs() {
+  document.querySelectorAll(".tab-btn").forEach(btn => {
+    btn.addEventListener("click", () => showTab(btn.dataset.tab));
+    btn.addEventListener("keydown", (e) => {
+      if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
+        e.preventDefault();
+        const tabs = Array.from(document.querySelectorAll(".tab-btn"));
+        const idx = tabs.indexOf(btn);
+        const next = e.key === "ArrowRight" ? (idx + 1) % tabs.length : (idx - 1 + tabs.length) % tabs.length;
+        tabs[next].focus();
+        showTab(tabs[next].dataset.tab);
+      }
+    });
+  });
+}
+
+// Transport shortcuts: Esc stop, Space pause/resume, ←/→ previous/next, ? help.
 // Ignored while typing so they do not fight with the text fields.
 document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape") {
-    if (event.repeat) return;
-    event.preventDefault();
-    invoke("scheduler_stop").catch(() => {});
-    return;
-  }
-
   const target = event.target;
   const typing =
     target &&
@@ -27,6 +103,30 @@ document.addEventListener("keydown", (event) => {
       target.tagName === "SELECT" ||
       target.tagName === "TEXTAREA" ||
       target.isContentEditable);
+
+  // Global shortcuts that work even when typing in some cases
+  if (event.key === "Escape") {
+    if (event.repeat) return;
+    // Close dialogs first
+    if (!document.getElementById("update-dialog").classList.contains("hidden")) {
+      document.getElementById("update-later-btn").click();
+      return;
+    }
+    if (!document.getElementById("shortcuts-dialog").classList.contains("hidden")) {
+      hideShortcuts();
+      return;
+    }
+    event.preventDefault();
+    invoke("scheduler_stop").catch(() => {});
+    return;
+  }
+
+  if (event.key === "?" && !typing) {
+    event.preventDefault();
+    showShortcuts();
+    return;
+  }
+
   if (typing) return;
 
   if (event.key === " " || event.key === "Spacebar") {
@@ -55,6 +155,14 @@ const updateDialog = document.getElementById("update-dialog");
 const updateMessage = document.getElementById("update-message");
 const updateLaterBtn = document.getElementById("update-later-btn");
 const updateInstallBtn = document.getElementById("update-install-btn");
+const themeToggleBtn = document.getElementById("theme-toggle");
+const helpBtn = document.getElementById("help-btn");
+const themeSelect = document.getElementById("theme-select");
+const showShortcutsBtn = document.getElementById("show-shortcuts");
+const settingsVersionEl = document.getElementById("settings-version");
+const shortcutsDialog = document.getElementById("shortcuts-dialog");
+const closeShortcutsBtn = document.getElementById("close-shortcuts");
+const closeShortcutsFooterBtn = document.getElementById("close-shortcuts-btn");
 
 const updateApiUrl = "https://api.github.com/repos/gmiddlecote/hdmi-media-controller/releases/latest";
 let currentVersion = "";
@@ -112,8 +220,10 @@ async function loadAppVersion() {
   try {
     currentVersion = await invoke("app_version");
     versionEl.textContent = `Version ${currentVersion}`;
+    if (settingsVersionEl) settingsVersionEl.textContent = `Version ${currentVersion}`;
   } catch (_) {
     versionEl.textContent = "Version unavailable";
+    if (settingsVersionEl) settingsVersionEl.textContent = "Version unavailable";
   }
 }
 
@@ -208,12 +318,21 @@ updateLaterBtn.addEventListener("click", () => {
   setUpdateStatus("Update available for the next launch");
 });
 updateInstallBtn.addEventListener("click", installPendingUpdate);
+themeToggleBtn?.addEventListener("click", cycleTheme);
+helpBtn?.addEventListener("click", showShortcuts);
+themeSelect?.addEventListener("change", (e) => applyTheme(e.target.value));
+showShortcutsBtn?.addEventListener("click", showShortcuts);
+closeShortcutsBtn?.addEventListener("click", hideShortcuts);
+closeShortcutsFooterBtn?.addEventListener("click", hideShortcuts);
+shortcutsDialog?.addEventListener("click", (e) => {
+  if (e.target === shortcutsDialog) hideShortcuts();
+});
 
 function buildResolutionSection(card, display) {
   const section = el("div", "resolution");
   section.append(el("div", "resolution-label", "Resolution"));
 
-  const currentLabel = el("div", "mode-current", "Loading\u2026");
+  const currentLabel = el("div", "mode-current", "Loading…");
   const select = el("select", "mode-select");
   select.disabled = true;
   const applyBtn = el("button", "apply-btn", "Apply");
@@ -235,7 +354,7 @@ function buildResolutionSection(card, display) {
     const mode = modes[select.selectedIndex];
     if (!mode) return;
     applyBtn.disabled = true;
-    cardStatus.textContent = `Applying ${formatMode(mode)}\u2026`;
+    cardStatus.textContent = `Applying ${formatMode(mode)}…`;
     try {
       await invoke("set_display_mode", {
         deviceName: display.deviceName,
@@ -245,6 +364,8 @@ function buildResolutionSection(card, display) {
       });
       cardStatus.textContent = `Applied ${formatMode(mode)}.`;
       currentLabel.textContent = `Current: ${formatMode(mode)}`;
+      // Update the current mode badge if present
+      updateCurrentModeBadge(card, mode);
     } catch (error) {
       cardStatus.textContent = `Failed: ${String(error)}`;
     } finally {
@@ -256,6 +377,9 @@ function buildResolutionSection(card, display) {
     .then((result) => {
       modes = result.modes;
       currentLabel.textContent = `Current: ${formatMode(result.current)}`;
+
+      // Add current mode badge
+      updateCurrentModeBadge(card, result.current);
 
       let currentMatch = null;
       select.replaceChildren();
@@ -287,6 +411,16 @@ function buildResolutionSection(card, display) {
   card.append(section);
 }
 
+function updateCurrentModeBadge(card, mode) {
+  let badge = card.querySelector(".current-mode-badge");
+  if (!badge) {
+    badge = el("div", "current-mode-badge");
+    const meta = card.querySelector(".display-meta");
+    if (meta) meta.insertAdjacentElement("afterend", badge);
+  }
+  badge.textContent = `Current: ${formatMode(mode)}`;
+}
+
 function renderDisplays(list) {
   displays = list;
   listEl.replaceChildren();
@@ -294,15 +428,26 @@ function renderDisplays(list) {
   renderQueue();
 
   if (displays.length === 0) {
-    listEl.append(
-      el("div", "empty", "No displays detected. Is a monitor connected?")
-    );
+    const emptyState = el("div", "empty-state");
+    emptyState.innerHTML = `
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+        <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/>
+        <path d="M8 21h8M12 17v4"/>
+      </svg>
+      <h3>No displays detected</h3>
+      <p>Connect an HDMI display and click Refresh</p>
+    `;
+    const refreshBtn = el("button", "subtle-btn", "Refresh");
+    refreshBtn.addEventListener("click", loadDisplays);
+    emptyState.appendChild(refreshBtn);
+    listEl.append(emptyState);
     statusEl.textContent = "No displays found.";
     return;
   }
 
   for (const display of displays) {
     const card = el("article", "display-card");
+    if (display.isActive) card.classList.add("current-mode");
 
     const title = el("div", "display-title", display.friendlyName);
     const meta = el(
@@ -331,7 +476,7 @@ function renderDisplays(list) {
 
 async function loadDisplays() {
   refreshBtn.disabled = true;
-  statusEl.textContent = "Enumerating displays\u2026";
+  statusEl.textContent = "Enumerating displays…";
 
   try {
     const displays = await invoke("list_displays");
@@ -372,12 +517,9 @@ const playbackStatus = document.getElementById("playback-status");
 
 let queuedPaths = [];
 let displays = [];
-
-// Master display restored from the saved session but not selectable yet
-// (displays are still being enumerated); applied by the next syncOutputSelect.
 let pendingDisplay = "";
-
 let audioDevices = [];
+let dragSourceIndex = null;
 
 function loadAudioDevices() {
   invoke("list_audio_devices")
@@ -477,17 +619,18 @@ function setItemFit(path, fit) {
   }
 }
 
-function moveQueuedItem(index, offset) {
-  const nextIndex = index + offset;
-  if (nextIndex < 0 || nextIndex >= queuedPaths.length) return;
-  [queuedPaths[index], queuedPaths[nextIndex]] = [
-    queuedPaths[nextIndex],
-    queuedPaths[index],
-  ];
-  if (activeIndex === index) {
-    activeIndex = nextIndex;
-  } else if (activeIndex === nextIndex) {
-    activeIndex = index;
+function moveQueuedItem(fromIndex, toIndex) {
+  if (toIndex < 0 || toIndex >= queuedPaths.length || fromIndex === toIndex) return;
+  const [item] = queuedPaths.splice(fromIndex, 1);
+  queuedPaths.splice(toIndex, 0, item);
+  if (activeIndex === fromIndex) {
+    activeIndex = toIndex;
+  } else if (activeIndex === toIndex) {
+    activeIndex = fromIndex > toIndex ? activeIndex + 1 : activeIndex - 1;
+  } else if (fromIndex < activeIndex && toIndex >= activeIndex) {
+    activeIndex--;
+  } else if (fromIndex > activeIndex && toIndex <= activeIndex) {
+    activeIndex++;
   }
   renderQueue();
   pushPlaylist();
@@ -498,15 +641,74 @@ function renderQueue() {
   queuedPaths.forEach((queued, index) => {
     const path = queued.path;
     const item = el("li", "queued-item");
+    item.draggable = true;
+    item.dataset.index = index;
+
+    // Drag and drop handlers
+    item.addEventListener("dragstart", (e) => {
+      dragSourceIndex = index;
+      item.classList.add("dragging");
+      e.dataTransfer.effectAllowed = "move";
+      e.dataTransfer.setData("text/plain", index);
+    });
+    item.addEventListener("dragend", () => {
+      item.classList.remove("dragging");
+      dragSourceIndex = null;
+      document.querySelectorAll(".queued-item.drag-over").forEach(el => el.classList.remove("drag-over"));
+    });
+    item.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "move";
+      if (dragSourceIndex !== null && dragSourceIndex !== index) {
+        item.classList.add("drag-over");
+      }
+    });
+    item.addEventListener("dragleave", () => {
+      item.classList.remove("drag-over");
+    });
+    item.addEventListener("drop", (e) => {
+      e.preventDefault();
+      item.classList.remove("drag-over");
+      if (dragSourceIndex !== null && dragSourceIndex !== index) {
+        moveQueuedItem(dragSourceIndex, index);
+      }
+    });
 
     // Thumbnail area — click = play once. A live frame comes from the
     // media:// url (img for images, video poster for videos); the kind
     // badge stays as a fallback when decoding fails.
     const media = el("div", "queued-media");
-    media.title = "Play once";
+    media.title = "Play once (hover video to preview)";
     const kindBadge = el("span", "queued-kind", mediaKind(path).toUpperCase());
     media.append(kindBadge);
     media.addEventListener("click", () => playItem(path, "once", 0));
+
+    // Hover preview for videos
+    let hoverVideo = null;
+    media.addEventListener("mouseenter", () => {
+      const kind = mediaKind(path);
+      if (kind !== "video" || hoverVideo) return;
+      invoke("media_register", { path })
+        .then((url) => {
+          hoverVideo = el("video", "thumb");
+          hoverVideo.muted = true;
+          hoverVideo.playsInline = true;
+          hoverVideo.preload = "auto";
+          hoverVideo.loop = true;
+          hoverVideo.src = url;
+          media.append(hoverVideo);
+          hoverVideo.play().catch(() => {});
+          kindBadge.style.opacity = "0";
+        })
+        .catch(() => {});
+    });
+    media.addEventListener("mouseleave", () => {
+      if (hoverVideo) {
+        hoverVideo.remove();
+        hoverVideo = null;
+        kindBadge.style.opacity = "";
+      }
+    });
 
     const loadThumb = (url) => {
       const showBadge = () => kindBadge.remove();
@@ -600,13 +802,13 @@ function renderQueue() {
     });
 
     const up = el("button", "action", "Up");
-    up.title = "Move this item up";
+    up.title = "Move this item up (or drag to reorder)";
     up.disabled = index === 0;
-    up.addEventListener("click", () => moveQueuedItem(index, -1));
+    up.addEventListener("click", () => moveQueuedItem(index, index - 1));
     const down = el("button", "action", "Down");
-    down.title = "Move this item down";
+    down.title = "Move this item down (or drag to reorder)";
     down.disabled = index === queuedPaths.length - 1;
-    down.addEventListener("click", () => moveQueuedItem(index, 1));
+    down.addEventListener("click", () => moveQueuedItem(index, index + 1));
 
     const preview = mediaKind(path) === "video" ? el("button", "action", "Preview") : null;
     let previewActive = false;
@@ -740,6 +942,7 @@ async function saveSession() {
         dwellMillis: Math.max(1, Number(dwellInput.value) || 5) * 1000,
         overlay: overlayInput.value,
         display: outputDisplay.value || "",
+        theme: localStorage.getItem(THEME_KEY) || "system",
       },
     });
   } catch (error) {
@@ -782,6 +985,10 @@ async function restoreSession() {
     } else {
       pendingDisplay = session.display;
     }
+  }
+  if (session.theme) {
+    applyTheme(session.theme);
+    if (themeSelect) themeSelect.value = session.theme;
   }
   renderQueue();
   if (queuedPaths.length > 0) {
@@ -998,4 +1205,6 @@ volumeInput.addEventListener("input", () => {
   await loadAppVersion();
   await invoke("app_ready").catch(() => {});
   checkForUpdates();
+  initTabs();
+  initTheme();
 })();
