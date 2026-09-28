@@ -29,8 +29,21 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path src-tauri/resources | Out-Null
-          $zip = "C:\tmp\ffmpeg.zip"
-          Invoke-WebRequest -Uri "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n7.0-latest-win64-gpl-7.0.zip" -OutFile $zip -UseBasicParsing
+          $zip = "C:\Windows\Temp\ffmpeg.zip"
+          $url = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
+          $maxRetries = 3
+          $retryDelay = 10
+          for ($i = 1; $i -le $maxRetries; $i++) {
+            try {
+              Write-Host "Downloading ffmpeg (attempt $i of $maxRetries)..."
+              Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing -TimeoutSec 120
+              break
+            } catch {
+              Write-Warning "Download failed: $_"
+              if ($i -eq $maxRetries) { throw "Failed to download ffmpeg after $maxRetries attempts" }
+              Start-Sleep -Seconds $retryDelay
+            }
+          }
           Expand-Archive -Path $zip -DestinationPath src-tauri/resources/temp -Force
           $exe = Get-ChildItem -Path src-tauri/resources/temp -Recurse -Filter "ffmpeg.exe" | Select-Object -First 1
           if ($exe) { Copy-Item $exe.FullName src-tauri/resources/ffmpeg.exe -Force }
