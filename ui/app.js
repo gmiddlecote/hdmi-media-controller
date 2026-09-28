@@ -65,20 +65,29 @@ function hideShortcuts() {
 
 // Tab management
 function showTab(tabName) {
-  document.querySelectorAll(".tab-btn").forEach(btn => {
+  const buttons = document.querySelectorAll(".tab-btn");
+  const panels = document.querySelectorAll(".tab-panel");
+  if (!buttons.length || !panels.length) return;
+  
+  buttons.forEach(btn => {
     const isActive = btn.dataset.tab === tabName;
     btn.classList.toggle("active", isActive);
     btn.setAttribute("aria-selected", isActive);
   });
-  document.querySelectorAll(".tab-panel").forEach(panel => {
+  panels.forEach(panel => {
     const isActive = panel.id === `${tabName}-panel`;
     panel.hidden = !isActive;
     if (isActive) panel.classList.add("active");
+    else panel.classList.remove("active");
   });
 }
 
 function initTabs() {
-  document.querySelectorAll(".tab-btn").forEach(btn => {
+  const buttons = document.querySelectorAll(".tab-btn");
+  const panels = document.querySelectorAll(".tab-panel");
+  if (!buttons.length || !panels.length) return;
+  
+  buttons.forEach(btn => {
     btn.addEventListener("click", () => showTab(btn.dataset.tab));
     btn.addEventListener("keydown", (e) => {
       if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
@@ -91,6 +100,9 @@ function initTabs() {
       }
     });
   });
+  
+  // Ensure initial state is correct
+  showTab("displays");
 }
 
 // Transport shortcuts: Esc stop, Space pause/resume, ←/→ previous/next, ? help.
