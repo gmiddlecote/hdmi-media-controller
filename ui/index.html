@@ -58,8 +58,10 @@
         <div class="overlay-row">
           <label class="overlay">
             Overlay
-            <input id="overlay-input" type="text" placeholder="Caption shown at the bottom of the output (leave empty to clear)" autocomplete="off" spellcheck="false" />
+            <input id="overlay-input" type="text" placeholder="Caption shown at the output (leave empty to clear)" autocomplete="off" spellcheck="false" />
           </label>
+          <select id="overlay-v" class="mode-select" aria-label="Overlay vertical"><option value="bottom">Bottom</option><option value="top">Top</option></select>
+          <select id="overlay-h" class="mode-select" aria-label="Overlay horizontal"><option value="left">Left</option><option value="center">Center</option><option value="right">Right</option></select>
           <button id="overlay-btn" type="button">Apply</button>
         </div>
 

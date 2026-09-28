@@ -381,8 +381,8 @@ button:disabled {
 
 .queued-media {
   position: relative;
-  width: 144px;
-  height: 100px;
+  width: 288px;
+  height: 200px;
   flex: 0 0 auto;
   border-radius: 6px;
   overflow: hidden;

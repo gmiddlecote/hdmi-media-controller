@@ -1,6 +1,6 @@
 [package]
 name = "hdmi-media-controller"
-version = "0.11.0"
+version = "0.12.0"
 description = "Windows desktop app to control media playback on external HDMI displays"
 edition = "2021"
 
@@ -29,7 +29,7 @@ winreg = "0.55"
 
 [profile.release]
 codegen-units = 1
-lto = true
-opt-level = "s"
+lto = "fat"
+opt-level = "z"
 panic = "abort"
 strip = true

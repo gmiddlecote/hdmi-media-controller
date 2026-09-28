@@ -37,6 +37,8 @@ pub struct RenderPayload {
     pub title: String,
     /// Optional caption rendered over the bottom edge of the output.
     pub overlay: String,
+    pub overlay_v: String,
+    pub overlay_h: String,
     /// How the media fills the output (`cover` or `contain`).
     pub fit: ObjectFit,
 }
@@ -167,6 +169,8 @@ pub fn open(
         kind: item.kind,
         title: item.name.clone(),
         overlay: overlay.to_string(),
+        overlay_v: "bottom".into(),
+        overlay_h: "left".into(),
         fit: item.fit,
     };
     // Register the payload *before* building the window: a newly created
@@ -293,6 +297,8 @@ pub fn open_audio(
         kind: item.kind,
         title: item.name.clone(),
         overlay: overlay.to_string(),
+        overlay_v: "bottom".into(),
+        overlay_h: "left".into(),
         fit: item.fit,
     };
     app.state::<RendererState>()

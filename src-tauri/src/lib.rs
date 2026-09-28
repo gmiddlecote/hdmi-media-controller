@@ -36,11 +36,7 @@ const SPLASH_SECONDS: u64 = 5;
 /// connector type (e.g. HDMI) when the display config can be queried.
 #[tauri::command]
 fn list_displays() -> Result<Vec<DisplayInfo>, String> {
-    // Safety: prevent hang on display enumeration (Win32 EnumDisplayDevices can block)
-    std::thread::spawn(move || {
-        let _ = display::list_displays();
-    });
-    Ok(Vec::new())
+    display::list_displays().map_err(|err| err.to_string())
 }
 
 /// Returns the modes supported by a display, plus the mode in effect now.
@@ -389,8 +385,10 @@ fn scheduler_set_overlay(
     app: tauri::AppHandle,
     state: tauri::State<'_, scheduler::State>,
     text: String,
+    v_pos: Option<String>,
+    h_pos: Option<String>,
 ) -> Result<(), String> {
-    state.set_overlay(text);
+    state.set_overlay(text, v_pos.unwrap_or_else(|| "bottom".into()), h_pos.unwrap_or_else(|| "left".into()));
     for label in app.state::<renderer::RendererState>().labels() {
         let _ = app.emit_to(label, "overlay-text", state.overlay());
     }
