@@ -493,6 +493,9 @@ function moveQueuedItem(index, offset) {
   pushPlaylist();
 }
 
+// In-memory thumbnail cache: path -> data URL
+const thumbnailCache = new Map();
+
 function renderQueue() {
   queueEl.replaceChildren();
   queuedPaths.forEach((queued, index) => {
@@ -511,15 +514,24 @@ function renderQueue() {
     const loadThumb = (url) => {
       const showBadge = () => kindBadge.remove();
       const kind = mediaKind(path);
+      
+      // Check cache first
+      if (kind === "video" && thumbnailCache.has(path)) {
+        const img = el("img", "thumb");
+        img.alt = "";
+        img.src = thumbnailCache.get(path);
+        img.addEventListener("load", showBadge);
+        img.addEventListener("error", () => {
+          img.remove();
+          // Fall back to video if cached thumbnail fails
+          loadVideoThumb(url, showBadge);
+        });
+        media.append(img);
+        return;
+      }
+      
       if (kind === "video") {
-        const video = el("video", "thumb");
-        video.muted = true;
-        video.playsInline = true;
-        video.preload = "metadata";
-        video.addEventListener("loadedmetadata", showBadge);
-        video.addEventListener("error", () => video.remove());
-        video.src = url;
-        media.append(video);
+        loadVideoThumb(url, showBadge);
       } else if (kind === "image") {
         const img = el("img", "thumb");
         img.alt = "";
@@ -529,6 +541,36 @@ function renderQueue() {
         media.append(img);
       }
     };
+    
+    function loadVideoThumb(url, showBadge) {
+        const video = el("video", "thumb");
+        video.muted = true;
+        video.playsInline = true;
+        video.preload = "metadata";
+        video.addEventListener("loadedmetadata", () => {
+          showBadge();
+          // Seek to 1 second to get a better thumbnail
+          video.currentTime = 1;
+        });
+        video.addEventListener("seeked", () => {
+          // Capture frame to canvas and store in memory
+          const canvas = document.createElement("canvas");
+          canvas.width = video.videoWidth;
+          canvas.height = video.videoHeight;
+          const ctx = canvas.getContext("2d");
+          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+          // Store as data URL in cache
+          thumbnailCache.set(path, canvas.toDataURL("image/jpeg", 0.8));
+          // Replace video with captured image
+          const img = el("img", "thumb");
+          img.alt = "";
+          img.src = thumbnailCache.get(path);
+          video.replaceWith(img);
+        });
+        video.addEventListener("error", () => video.remove());
+        video.src = url;
+        media.append(video);
+      };
     invoke("media_register", { path })
       .then(loadThumb)
       .catch(() => {});
