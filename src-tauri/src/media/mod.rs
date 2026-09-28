@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use crate::logging;
 
 /// Kind of media a source can carry.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum MediaKind {
     Image,
@@ -38,7 +38,7 @@ pub enum ObjectFit {
 }
 
 /// A single playable media file.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MediaItem {
     /// Absolute path to the file on disk.
@@ -52,6 +52,23 @@ pub struct MediaItem {
     /// Display the item prefers to play on; empty inherits the caller's display.
     pub display: String,
     pub audio_device: String,
+    /// Overlay text for this item (empty = none).
+    #[serde(default)]
+    pub overlay: String,
+    /// Overlay vertical position: "top" or "bottom".
+    #[serde(default = "default_overlay_v")]
+    pub overlay_v: String,
+    /// Overlay horizontal position: "left", "center", "right".
+    #[serde(default = "default_overlay_h")]
+    pub overlay_h: String,
+}
+
+fn default_overlay_v() -> String {
+    "bottom".to_string()
+}
+
+fn default_overlay_h() -> String {
+    "left".to_string()
 }
 
 impl MediaItem {
@@ -70,6 +87,9 @@ impl MediaItem {
             fit: ObjectFit::default(),
             display: String::new(),
             audio_device: String::new(),
+            overlay: String::new(),
+            overlay_v: default_overlay_v(),
+            overlay_h: default_overlay_h(),
         }
     }
 }

@@ -137,6 +137,12 @@ struct PlaylistEntry {
     display: String,
     #[serde(default)]
     audio_device: String,
+    #[serde(default)]
+    overlay: String,
+    #[serde(default)]
+    overlay_v: String,
+    #[serde(default)]
+    overlay_h: String,
 }
 
 /// Replaces the playback queue from a list of file paths. Files that do not
@@ -154,6 +160,9 @@ fn scheduler_set_playlist(
                 item.fit = entry.fit;
                 item.display = entry.display.clone();
                 item.audio_device = entry.audio_device.clone();
+                item.overlay = entry.overlay.clone();
+                item.overlay_v = if entry.overlay_v.is_empty() { "bottom".to_string() } else { entry.overlay_v.clone() };
+                item.overlay_h = if entry.overlay_h.is_empty() { "left".to_string() } else { entry.overlay_h.clone() };
                 item
             })
         })
@@ -749,6 +758,9 @@ mod tests {
                 fit: ObjectFit::Cover,
                 display: String::new(),
                 audio_device: String::new(),
+                overlay: String::new(),
+                overlay_v: String::new(),
+                overlay_h: String::new(),
             }],
             dwell_millis: 4000,
             overlay: "caption".into(),

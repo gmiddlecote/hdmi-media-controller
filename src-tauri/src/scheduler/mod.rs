@@ -566,13 +566,12 @@ impl Kernel {
         if item.kind == MediaKind::Audio {
             *seq += 1;
             let label = format!("audio-{seq}");
-            let overlay = self.state.overlay();
             if !item.audio_device.is_empty() {
                 if let Err(err) = crate::audio::set_default_device(&item.audio_device) {
                     self.set_error(err);
                 }
             }
-            if let Err(err) = renderer::open_audio(&self.app, item, &label, &overlay.text) {
+            if let Err(err) = renderer::open_audio(&self.app, item, &label) {
                 self.set_error(err.to_string());
                 return false;
             }
@@ -593,8 +592,7 @@ impl Kernel {
         };
         *seq += 1;
         let label = renderer::label_for(display, *seq);
-        let overlay = self.state.overlay();
-        if let Err(err) = renderer::open(&self.app, &display_info, item, &label, &overlay.text) {
+        if let Err(err) = renderer::open(&self.app, &display_info, item, &label) {
             self.set_error(err.to_string());
             return false;
         }

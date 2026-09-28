@@ -541,6 +541,10 @@ function queueEntry(path) {
     fit: "cover",
     display: outputDisplay.value || "",
     audioDevice: "",
+    overlay: "",
+    overlay_v: "bottom",
+    overlay_h: "left",
+    seconds: 5,
   };
 }
 
@@ -737,12 +741,18 @@ function renderQueue() {
 
     const name = path.split(/[\\/]/).pop() || path;
 
-    const body = el("div", "queued-body");
-    const nameEl = el("span", "queued-name", name);
+    // File name below thumbnail
+    const nameEl = el("div", "queued-name", name);
     nameEl.title = path + "\nClick to play once";
     nameEl.addEventListener("click", () => playItem(path, "once", 0));
 
+    // Right side: action groups (2-3 lines)
     const actions = el("div", "queued-actions");
+
+    // Group 1: Playback mode (Once / Loop / Secs)
+    const playbackGroup = el("div", "action-group");
+    const playbackLabel = el("div", "action-group-label", "Playback");
+    const playbackRow = el("div", "action-row");
     const once = el("button", "action", "Once");
     once.title = "Play this item once, then stop";
     once.addEventListener("click", () => playItem(path, "once", 0));
@@ -753,7 +763,7 @@ function renderQueue() {
     seconds.type = "number";
     seconds.min = "1";
     seconds.step = "1";
-    seconds.value = "5";
+    seconds.value = String(queued.seconds || 5);
     seconds.title = "Seconds to show this item";
     seconds.addEventListener("click", (event) => event.stopPropagation());
     const timed = el("button", "action", "Secs");
@@ -761,31 +771,36 @@ function renderQueue() {
     timed.addEventListener("click", () => {
       playItem(path, "timed", Number(seconds.value) || 5);
     });
+    playbackRow.append(once, loop, seconds, timed);
+    playbackGroup.append(playbackLabel, playbackRow);
+
+    // Group 2: Fit mode (Cover / Contain)
+    const fitGroup = el("div", "action-group");
+    const fitLabel = el("div", "action-group-label", "Fit");
+    const fitRow = el("div", "action-row");
     const fit = el("select", "fit-select");
     fit.title = "How the media fills the screen";
     fit.addEventListener("click", (event) => event.stopPropagation());
-    const cover = el("option", "", "cover");
+    const cover = el("option", "", "Cover");
     cover.value = "cover";
-    const contain = el("option", "", "contain");
+    const contain = el("option", "", "Contain");
     contain.value = "contain";
     fit.append(cover, contain);
-    fit.value = queued.fit;
+    fit.value = queued.fit || "cover";
     fit.addEventListener("change", () => {
       queued.fit = fit.value;
       pushPlaylist();
       setItemFit(path, fit.value);
     });
-    const remove = el("button", "queued-remove", "\u2715");
-    remove.title = "Remove from playlist";
-    remove.disabled = index === activeIndex;
-    remove.addEventListener("click", () => {
-      queuedPaths.splice(index, 1);
-      renderQueue();
-      pushPlaylist();
-    });
+    fitRow.append(fit);
+    fitGroup.append(fitLabel, fitRow);
 
+    // Group 3: Display (Master / specific display)
+    const monitorGroup = el("div", "action-group");
+    const monitorLabel = el("div", "action-group-label", "Display");
+    const monitorRow = el("div", "action-row");
     const monitor = el("select", "monitor-select");
-    monitor.title = "Monitor this item plays on (\u201cMaster\u201d follows the master dropdown)";
+    monitor.title = "Monitor this item plays on (Master follows the master dropdown)";
     monitor.addEventListener("click", (event) => event.stopPropagation());
     const inherit = el("option", "", "Master");
     inherit.value = "";
@@ -800,7 +815,61 @@ function renderQueue() {
       queued.display = monitor.value;
       pushPlaylist();
     });
+    monitorRow.append(monitor);
+    monitorGroup.append(monitorLabel, monitorRow);
 
+    // Group 4: Overlay (per-item)
+    const overlayGroup = el("div", "overlay-group");
+    const overlayLabel = el("div", "overlay-group-label", "Overlay");
+    const overlayInputs = el("div", "overlay-inputs");
+    const overlayText = el("input", "overlay-text");
+    overlayText.type = "text";
+    overlayText.placeholder = "Caption (empty = none)";
+    overlayText.value = queued.overlay || "";
+    overlayText.addEventListener("change", () => {
+      queued.overlay = overlayText.value;
+      pushPlaylist();
+    });
+    const overlayV = el("select", "overlay-v");
+    overlayV.title = "Vertical position";
+    const overlayVBottom = el("option", "", "Bottom");
+    overlayVBottom.value = "bottom";
+    const overlayVTop = el("option", "", "Top");
+    overlayVTop.value = "top";
+    overlayV.append(overlayVBottom, overlayVTop);
+    overlayV.value = queued.overlay_v || "bottom";
+    overlayV.addEventListener("change", () => {
+      queued.overlay_v = overlayV.value;
+      pushPlaylist();
+    });
+    const overlayH = el("select", "overlay-h");
+    overlayH.title = "Horizontal position";
+    const overlayHLeft = el("option", "", "Left");
+    overlayHLeft.value = "left";
+    const overlayHCenter = el("option", "", "Center");
+    overlayHCenter.value = "center";
+    const overlayHRight = el("option", "", "Right");
+    overlayHRight.value = "right";
+    overlayH.append(overlayHLeft, overlayHCenter, overlayHRight);
+    overlayH.value = queued.overlay_h || "left";
+    overlayH.addEventListener("change", () => {
+      queued.overlay_h = overlayH.value;
+      pushPlaylist();
+    });
+    overlayInputs.append(overlayText, overlayV, overlayH);
+    overlayGroup.append(overlayLabel, overlayInputs);
+
+    // Remove button (always at bottom right)
+    const remove = el("button", "queued-remove", "\u2715");
+    remove.title = "Remove from playlist";
+    remove.disabled = index === activeIndex;
+    remove.addEventListener("click", () => {
+      queuedPaths.splice(index, 1);
+      renderQueue();
+      pushPlaylist();
+    });
+
+    // Up/Down buttons (for non-drag reorder)
     const up = el("button", "action", "Up");
     up.title = "Move this item up (or drag to reorder)";
     up.disabled = index === 0;
@@ -810,6 +879,7 @@ function renderQueue() {
     down.disabled = index === queuedPaths.length - 1;
     down.addEventListener("click", () => moveQueuedItem(index, index + 1));
 
+    // Preview button (for videos)
     const preview = mediaKind(path) === "video" ? el("button", "action", "Preview") : null;
     let previewActive = false;
     if (preview) {
@@ -825,6 +895,7 @@ function renderQueue() {
       });
     }
 
+    // Audio output selector (for audio files)
     let audioOutput = null;
     if (mediaKind(path) === "audio") {
       if (
@@ -845,7 +916,7 @@ function renderQueue() {
         option.value = device.id;
         audioOutput.append(option);
       });
-      audioOutput.value = queued.audioDevice;
+      audioOutput.value = queued.audioDevice || "";
       audioOutput.disabled = audioDevices.length === 0;
       audioOutput.addEventListener("change", async () => {
         const previous = queued.audioDevice;
@@ -870,12 +941,21 @@ function renderQueue() {
       });
     }
 
-    actions.append(once, loop, seconds, timed, fit, monitor, up, down);
-    if (audioOutput) actions.append(audioOutput);
+    // Build right side: stack groups vertically (2-3 lines)
+    actions.append(playbackGroup, fitGroup, monitorGroup, overlayGroup);
+    if (audioOutput) {
+      const audioGroup = el("div", "action-group");
+      const audioLabel = el("div", "action-group-label", "Audio");
+      audioGroup.append(audioLabel, audioOutput);
+      actions.append(audioGroup);
+    }
     if (preview) actions.append(preview);
-    actions.append(remove);
-    body.append(nameEl, actions);
-    item.append(media, body);
+    actions.append(up, down, remove);
+
+    // Build item: media (with name below) on left, actions on right
+    const mediaWrapper = el("div", "queued-media-wrapper");
+    mediaWrapper.append(media, nameEl);
+    item.append(mediaWrapper, actions);
     queueEl.append(item);
   });
   dropzoneHint.textContent =
@@ -903,6 +983,9 @@ async function pushPlaylist() {
         fit: queued.fit,
         display: queued.display,
         audioDevice: queued.audioDevice,
+        overlay: queued.overlay,
+        overlay_v: queued.overlay_v,
+        overlay_h: queued.overlay_h,
       })),
     });
     if (accepted < queuedPaths.length) {
@@ -938,6 +1021,10 @@ async function saveSession() {
           fit: queued.fit,
           display: queued.display,
           audioDevice: queued.audioDevice,
+          overlay: queued.overlay,
+          overlay_v: queued.overlay_v,
+          overlay_h: queued.overlay_h,
+          seconds: queued.seconds,
         })),
         dwellMillis: Math.max(1, Number(dwellInput.value) || 5) * 1000,
         overlay: overlayInput.value,
@@ -968,6 +1055,10 @@ async function restoreSession() {
         fit: entry.fit === "contain" ? "contain" : "cover",
         display: entry.display || "",
         audioDevice: entry.audioDevice || "",
+        overlay: entry.overlay || "",
+        overlay_v: entry.overlay_v || "bottom",
+        overlay_h: entry.overlay_h || "left",
+        seconds: entry.seconds || 5,
       }));
   }
   if (session.dwellMillis > 0) {

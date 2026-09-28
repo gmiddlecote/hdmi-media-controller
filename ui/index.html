@@ -35,6 +35,14 @@
             <h2>Detected displays</h2>
             <button id="refresh-btn" type="button">Refresh</button>
           </div>
+          
+          <div class="master-display-row">
+            <label class="master-display">
+              Master display
+              <select id="output-display" class="mode-select" aria-label="Master monitor (applies to items without specific display)"></select>
+            </label>
+          </div>
+
           <div id="display-list" class="display-list" aria-live="polite"></div>
           <p id="status" class="status">Loading…</p>
         </section>
@@ -64,18 +72,7 @@
             <button id="preview-btn" class="preview-btn" type="button" disabled>Open preview</button>
           </div>
 
-          <div class="overlay-row">
-            <label class="overlay">
-              Overlay
-              <input id="overlay-input" type="text" placeholder="Caption shown at the output (leave empty to clear)" autocomplete="off" spellcheck="false" />
-            </label>
-            <select id="overlay-v" class="mode-select" aria-label="Overlay vertical"><option value="bottom">Bottom</option><option value="top">Top</option></select>
-            <select id="overlay-h" class="mode-select" aria-label="Overlay horizontal"><option value="left">Left</option><option value="center">Center</option><option value="right">Right</option></select>
-            <button id="overlay-btn" type="button">Apply</button>
-          </div>
-
           <div class="playback-row">
-            <select id="output-display" class="mode-select" aria-label="Master monitor (applies to all items)"></select>
             <label class="dwell">
               Dwell
               <input id="dwell-input" type="number" min="1" step="1" value="5" />s
