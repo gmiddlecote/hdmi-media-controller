@@ -609,9 +609,18 @@ function renderQueue() {
     down.addEventListener("click", () => moveQueuedItem(index, 1));
 
     const preview = mediaKind(path) === "video" ? el("button", "action", "Preview") : null;
+    let previewActive = false;
     if (preview) {
-      preview.title = "Open this video in the dedicated preview window";
-      preview.addEventListener("click", () => openPreview(path));
+      preview.title = "Preview (click to stop)";
+      preview.addEventListener("click", () => {
+        previewActive = !previewActive;
+        preview.textContent = previewActive ? "Stop" : "Preview";
+        if (previewActive) {
+          invoke("scheduler_play_item", { path, mode: "loop", seconds: 0 }).catch(() => {});
+        } else {
+          invoke("scheduler_stop", {}).catch(() => {});
+        }
+      });
     }
 
     let audioOutput = null;
