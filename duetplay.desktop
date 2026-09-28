@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=DuetPlay
+Comment=Media playback for external HDMI displays
+Exec=env GDK_BACKEND=x11 WEBKIT_DISABLE_DMABUF_RENDERER=1 /home/george/Development/Rust/hdmi-media-controller/src-tauri/target/debug/hdmi-media-controller
+Icon=/home/george/Development/Rust/hdmi-media-controller/src-tauri/icons/128x128.png
+Terminal=false
+Categories=AudioVideo;Player;
+StartupWMClass=hdmi-media-controller
