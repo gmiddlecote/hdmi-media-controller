@@ -75,9 +75,9 @@ All checks must be clean before committing.
   listen to `displays-changed`, `scheduler-state`, `tauri://drag-drop`;
   backend-emitted to render windows: `output-control`, `overlay-text`;
   render windows emit `render-finished`, `media-progress`.
-- Release: after a feature or fix commit lands on `main`, bump `version` in
-  `src-tauri/Cargo.toml` (patch for fixes, minor for features), commit, push,
-  then `git tag vX.Y.Z && git push origin vX.Y.Z` — do this automatically (no
-  need to ask) so the Windows installer is rebuilt and published under a
-  version that matches the installer filenames and tag. `tauri.conf.json`
+- Work is done on `dev` only. Never merge `dev` → `main`, tag, or trigger a
+  release unless the user explicitly says so.
+- Every push to `dev` or `main` must include a version bump in
+  `src-tauri/Cargo.toml` — major for breaking changes, minor otherwise (no
+  patch bumps) — with `Cargo.lock` synced in the same push. `tauri.conf.json`
   must NOT carry a `version` field — Cargo.toml is the single version source.
