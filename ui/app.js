@@ -442,7 +442,7 @@ async function playItem(path, mode, seconds) {
   const device = (entry && entry.display) || outputDisplay.value || "";
   if (!device) {
     playbackStatus.textContent = "Choose an output display first.";
-    return;
+    return false;
   }
   const fit = entry ? entry.fit : "cover";
   const audioDevice = entry ? entry.audioDevice : "";
@@ -455,8 +455,10 @@ async function playItem(path, mode, seconds) {
       fit,
       audioDevice,
     });
+    return true;
   } catch (error) {
     playbackStatus.textContent = `Could not play: ${String(error)}`;
+    return false;
   }
 }
 
@@ -496,6 +498,34 @@ function moveQueuedItem(index, offset) {
 // In-memory thumbnail cache: path -> data URL
 const thumbnailCache = new Map();
 
+// Play mode currently running from a queue row ("once"/"loop"); drives the
+// green highlight on the button that started it.
+let activePlayMode = null;
+
+function updatePlayModeHighlight() {
+  queueEl.querySelectorAll(".action[data-mode]").forEach((button) => {
+    const row = button.closest(".queued-item");
+    const index = [...queueEl.children].indexOf(row);
+    const queued = queuedPaths[index];
+    const on =
+      !!activePlayMode &&
+      !!queued &&
+      queued.path === activePlayMode.path &&
+      button.dataset.mode === activePlayMode.mode;
+    button.classList.toggle("mode-active", on);
+    button.setAttribute("aria-pressed", on ? "true" : "false");
+  });
+}
+
+async function playQueuedWithHighlight(path, mode, seconds) {
+  const ok = await playItem(path, mode, seconds);
+  if (ok && (mode === "once" || mode === "loop")) {
+    activePlayMode = { path, mode };
+    updatePlayModeHighlight();
+  }
+  return ok;
+}
+
 function renderQueue() {
   queueEl.replaceChildren();
   queuedPaths.forEach((queued, index) => {
@@ -509,7 +539,7 @@ function renderQueue() {
     media.title = "Play once";
     const kindBadge = el("span", "queued-kind", mediaKind(path).toUpperCase());
     media.append(kindBadge);
-    media.addEventListener("click", () => playItem(path, "once", 0));
+    media.addEventListener("click", () => playQueuedWithHighlight(path, "once", 0));
 
     const loadThumb = (url) => {
       const showBadge = () => kindBadge.remove();
@@ -580,15 +610,19 @@ function renderQueue() {
     const body = el("div", "queued-body");
     const nameEl = el("span", "queued-name", name);
     nameEl.title = path + "\nClick to play once";
-    nameEl.addEventListener("click", () => playItem(path, "once", 0));
+    nameEl.addEventListener("click", () => playQueuedWithHighlight(path, "once", 0));
 
     const actions = el("div", "queued-actions");
     const once = el("button", "action", "Once");
     once.title = "Play this item once, then stop";
-    once.addEventListener("click", () => playItem(path, "once", 0));
+    once.dataset.mode = "once";
+    once.setAttribute("aria-pressed", "false");
+    once.addEventListener("click", () => playQueuedWithHighlight(path, "once", 0));
     const loop = el("button", "action", "Loop");
     loop.title = "Play this item continuously until stopped";
-    loop.addEventListener("click", () => playItem(path, "loop", 0));
+    loop.dataset.mode = "loop";
+    loop.setAttribute("aria-pressed", "false");
+    loop.addEventListener("click", () => playQueuedWithHighlight(path, "loop", 0));
     const seconds = el("input", "seconds");
     seconds.type = "number";
     seconds.min = "1";
@@ -619,6 +653,7 @@ function renderQueue() {
     remove.title = "Remove from playlist";
     remove.disabled = index === activeIndex;
     remove.addEventListener("click", () => {
+      if (activePlayMode && activePlayMode.path === path) activePlayMode = null;
       queuedPaths.splice(index, 1);
       renderQueue();
       pushPlaylist();
@@ -710,7 +745,12 @@ function renderQueue() {
       });
     }
 
-    actions.append(once, loop, seconds, timed, fit, monitor, up, down);
+    const playGroup = el("div", "play-group");
+    playGroup.setAttribute("role", "group");
+    playGroup.setAttribute("aria-label", `Play ${name}`);
+    playGroup.append(el("span", "play-group-label", "Play"), once, loop, seconds, timed);
+
+    actions.append(playGroup, fit, monitor, up, down);
     if (audioOutput) actions.append(audioOutput);
     if (preview) actions.append(preview);
     actions.append(remove);
@@ -718,6 +758,7 @@ function renderQueue() {
     item.append(media, body);
     queueEl.append(item);
   });
+  updatePlayModeHighlight();
   dropzoneHint.textContent =
     queuedPaths.length === 0
       ? "Drop image, video, or audio files here to build the playlist"
@@ -845,11 +886,18 @@ function updateSnapshot(snapshot) {
   }
 
   activeIndex = snapshot.playing ? snapshot.index : -1;
+  if (
+    activePlayMode &&
+    (!snapshot.playing || snapshot.path !== activePlayMode.path)
+  ) {
+    activePlayMode = null;
+  }
   [...queueEl.children].forEach((child, i) => {
     child.classList.toggle("active", i === activeIndex);
     const remove = child.querySelector(".queued-remove");
     if (remove) remove.disabled = i === activeIndex;
   });
+  updatePlayModeHighlight();
 
   playBtn.disabled = snapshot.playing || !snapshot.total;
   stopBtn.disabled = !snapshot.playing;

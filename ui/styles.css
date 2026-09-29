@@ -104,7 +104,7 @@ p {
 
 label {
   color: var(--text-2);
-  font-size: 12px;
+  font-size: 18px;
 }
 
 ::selection {
@@ -122,13 +122,13 @@ select {
 
 input:not([type="range"]),
 select {
-  height: 30px;
-  padding: 0 9px;
+  height: 45px;
+  padding: 0 13.5px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--surface-3);
   color: var(--text);
-  font-size: 13px;
+  font-size: 19.5px;
   transition:
     border-color 0.12s ease,
     box-shadow 0.12s ease;
@@ -186,13 +186,13 @@ input[type="range"]:focus-visible {
 }
 
 button {
-  min-height: 30px;
-  padding: 0 12px;
+  min-height: 45px;
+  padding: 0 18px;
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
   background: var(--surface-3);
   color: var(--text);
-  font-size: 13px;
+  font-size: 19.5px;
   cursor: pointer;
   user-select: none;
   transition:
@@ -222,8 +222,8 @@ button:focus-visible {
 }
 
 .play-btn {
-  min-height: 32px;
-  padding: 0 20px;
+  min-height: 48px;
+  padding: 0 30px;
   background: var(--accent);
   border-color: var(--accent);
   color: var(--accent-ink);
@@ -236,12 +236,12 @@ button:focus-visible {
 }
 
 .subtle-btn {
-  min-height: 26px;
-  padding: 0 8px;
+  min-height: 39px;
+  padding: 0 12px;
   background: transparent;
   border-color: transparent;
   color: var(--text-2);
-  font-size: 12px;
+  font-size: 18px;
 }
 
 .subtle-btn:hover:not(:disabled) {
@@ -360,12 +360,12 @@ button:focus-visible {
 }
 
 .panel-head button {
-  min-height: 28px;
-  padding: 0 10px;
+  min-height: 42px;
+  padding: 0 15px;
   background: transparent;
   border-color: var(--border);
   color: var(--text-2);
-  font-size: 12.5px;
+  font-size: 18.75px;
 }
 
 .panel-head button:hover:not(:disabled) {
@@ -632,12 +632,12 @@ button:focus-visible {
 }
 
 .queued-actions .action {
-  min-height: 24px;
-  padding: 0 8px;
+  min-height: 36px;
+  padding: 0 12px;
   background: transparent;
   border-color: var(--border);
   color: var(--text-2);
-  font-size: 11.5px;
+  font-size: 17.25px;
 }
 
 .queued-actions .action:hover:not(:disabled) {
@@ -647,40 +647,74 @@ button:focus-visible {
 }
 
 .queued-actions .seconds {
-  width: 56px;
-  height: 24px;
-  padding: 0 4px;
-  font-size: 11.5px;
+  width: 84px;
+  height: 36px;
+  padding: 0 6px;
+  font-size: 17.25px;
   text-align: center;
 }
 
 .queued-actions .fit-select,
 .queued-actions .monitor-select,
 .queued-actions .audio-item-select {
-  height: 24px;
-  padding: 0 6px;
-  font-size: 11.5px;
+  height: 36px;
+  padding: 0 9px;
+  font-size: 17.25px;
 }
 
 .queued-actions .monitor-select,
 .queued-actions .audio-item-select {
-  max-width: 170px;
+  max-width: 255px;
 }
 
 .queued-remove {
-  min-height: 24px;
+  min-height: 36px;
   margin-left: auto;
-  padding: 0 7px;
+  padding: 0 10.5px;
   background: transparent;
   border-color: transparent;
   color: var(--text-3);
-  font-size: 12px;
+  font-size: 18px;
 }
 
 .queued-remove:hover:not(:disabled) {
   background: var(--danger-dim);
   border-color: transparent;
   color: var(--danger);
+}
+
+.play-group {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 12px 10px 8px;
+  background: var(--surface-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+}
+
+.play-group-label {
+  position: absolute;
+  top: -8px;
+  left: 12px;
+  padding: 0 7px;
+  background: var(--surface-3);
+  color: var(--text-2);
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 15px;
+  letter-spacing: 0.02em;
+}
+
+.queued-actions .action.mode-active,
+.queued-actions .action.mode-active:hover:not(:disabled) {
+  background: var(--success-dim);
+  border-color: var(--success);
+  color: var(--success);
+  box-shadow: inset 0 0 0 3px var(--success);
 }
 
 /* ---------- 10. Now playing ---------- */
@@ -769,9 +803,9 @@ button:focus-visible {
 }
 
 .playback-row .mode-select {
-  flex: 1 1 200px;
-  min-width: 180px;
-  max-width: 320px;
+  flex: 1 1 300px;
+  min-width: 240px;
+  max-width: 480px;
   border-color: rgba(62, 200, 232, 0.4);
 }
 
@@ -784,7 +818,7 @@ button:focus-visible {
 }
 
 .dwell input {
-  width: 54px;
+  width: 81px;
   text-align: center;
 }
 
@@ -813,7 +847,7 @@ button:focus-visible {
   align-items: center;
   gap: 8px;
   color: var(--text-2);
-  font-size: 12px;
+  font-size: 18px;
 }
 
 .overlay-row .overlay input {
@@ -823,7 +857,7 @@ button:focus-visible {
 
 .overlay-row .mode-select {
   width: auto;
-  min-width: 96px;
+  min-width: 144px;
 }
 
 /* ---------- 13. Update dialog ---------- */
