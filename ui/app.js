@@ -754,8 +754,10 @@ function renderQueue() {
     if (audioOutput) actions.append(audioOutput);
     if (preview) actions.append(preview);
     actions.append(remove);
-    body.append(nameEl, actions);
-    item.append(media, body);
+    body.append(actions);
+    const mediaCol = el("div", "queued-media-col");
+    mediaCol.append(media, nameEl);
+    item.append(mediaCol, body);
     queueEl.append(item);
   });
   updatePlayModeHighlight();
