@@ -570,8 +570,8 @@ button:focus-visible {
 .queued-media {
   position: relative;
   flex: 0 0 auto;
-  width: 96px;
-  height: 54px;
+  width: 192px;
+  height: 108px;
   display: grid;
   place-items: center;
   overflow: hidden;
@@ -595,7 +595,7 @@ button:focus-visible {
 
 .queued-media .queued-kind {
   color: var(--text-3);
-  font-size: 9px;
+  font-size: 18px;
   font-weight: 700;
   letter-spacing: 0.1em;
 }
