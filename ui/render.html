@@ -18,8 +18,8 @@
         display: flex;
         align-items: center;
         justify-content: center;
-        color: #94a3b8;
-        font: 14px/1.6 system-ui, sans-serif;
+        color: #98a2b0;
+        font: 14px/1.6 "Segoe UI", system-ui, sans-serif;
         text-align: center;
         padding: 24px;
         box-sizing: border-box;
@@ -28,10 +28,16 @@
         padding: 0;
       }
       #stage.pre-line {
-        white-space: pre-line;
-        font-family: ui-monospace, Consolas, monospace;
-        font-size: 13px;
+        display: block;
+        padding: 24px 32px;
+        overflow: auto;
+        white-space: pre-wrap;
+        word-break: break-word;
         text-align: left;
+        font-family: "Cascadia Mono", Consolas, ui-monospace, monospace;
+        font-size: 13px;
+        line-height: 1.55;
+        color: #b9c2cd;
       }
       #stage.media img,
       #stage.media video {
@@ -41,7 +47,7 @@
         height: 100%;
         object-fit: cover;
         background: #000;
-        animation: media-fade 0.5s ease both;
+        animation: media-fade 0.45s ease both;
       }
       @keyframes media-fade {
         from {
@@ -54,29 +60,62 @@
       .overlay {
         position: absolute;
         z-index: 10;
-        left: 0;
-        right: 0;
-        bottom: 0;
-        padding: 12px 28px;
-        background: rgba(0, 0, 0, 0.55);
-        color: #fff;
-        font: 500 17px/1.4 system-ui, sans-serif;
-        text-align: center;
+        left: 20px;
+        right: auto;
+        top: auto;
+        bottom: 20px;
+        width: max-content;
+        max-width: calc(100% - 40px);
+        box-sizing: border-box;
+        padding: 10px 20px;
+        border-radius: 10px;
+        background: rgba(6, 9, 13, 0.74);
+        box-shadow: 0 6px 28px rgba(0, 0, 0, 0.45);
+        color: #f4f7fa;
+        font: 500 17px/1.45 "Segoe UI", system-ui, sans-serif;
+        text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55);
         animation: media-fade 0.3s ease both;
       }
-      .overlay.top { top: 0; bottom: auto; }
-      .overlay.bottom { bottom: 0; top: auto; }
-      .overlay.left { left: 0; right: auto; text-align: left; }
-      .overlay.center { left: 50%; right: auto; transform: translateX(-50%); text-align: center; }
-      .overlay.right { left: auto; right: 0; text-align: right; }
+      .overlay.top {
+        top: 20px;
+        bottom: auto;
+      }
+      .overlay.bottom {
+        bottom: 20px;
+        top: auto;
+      }
+      .overlay.left {
+        left: 20px;
+        right: auto;
+        text-align: left;
+      }
+      .overlay.center {
+        left: 50%;
+        right: auto;
+        transform: translateX(-50%);
+        text-align: center;
+      }
+      .overlay.right {
+        left: auto;
+        right: 20px;
+        text-align: right;
+      }
       .audio-title {
-        font: 600 28px/1.4 system-ui, sans-serif;
-        color: #e2e8f0;
+        font: 600 26px/1.4 "Segoe UI", system-ui, sans-serif;
+        color: #e8eef4;
         max-width: 80%;
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
         animation: media-fade 0.5s ease both;
+      }
+      @media (prefers-reduced-motion: reduce) {
+        *,
+        *::before,
+        *::after {
+          animation-duration: 0.01ms !important;
+          animation-iteration-count: 1 !important;
+        }
       }
     </style>
   </head>
