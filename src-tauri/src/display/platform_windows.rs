@@ -306,8 +306,10 @@ fn query_active_paths() -> Option<Vec<DISPLAYCONFIG_PATH_INFO>> {
         let mut modes: Vec<DISPLAYCONFIG_MODE_INFO> = (0..mode_capacity)
             .map(|_| unsafe { std::mem::zeroed() })
             .collect();
-        let mut topology = 0i32;
-
+        // `pTopologyId` is optional and the topology id is not used here, so
+        // it is passed as NULL. Passing an actual pointer makes the call fail
+        // with ERROR_INVALID_PARAMETER on current Windows builds, which
+        // silently dropped every connector label.
         let result = unsafe {
             QueryDisplayConfig(
                 QDC_ONLY_ACTIVE_PATHS,
@@ -315,11 +317,11 @@ fn query_active_paths() -> Option<Vec<DISPLAYCONFIG_PATH_INFO>> {
                 paths.as_mut_ptr(),
                 &mut mode_capacity,
                 modes.as_mut_ptr(),
-                &mut topology,
+                ptr::null_mut(),
             )
         };
         match result {
-            ERROR_SUCCESS => return Some(paths),
+            ERROR_SUCCESS => return Some(paths.into_iter().take(path_capacity as usize).collect()),
             ERROR_INSUFFICIENT_BUFFER => {
                 // Capacity was too small (the config changed); sizes were
                 // updated by the call, so retry with the new values.
