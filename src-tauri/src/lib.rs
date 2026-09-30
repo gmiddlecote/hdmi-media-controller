@@ -8,10 +8,12 @@
 //! - [`audio`] — lists audio playback devices and picks the one used.
 //! - [`media`] — loads and serves local image/video/audio files.
 //! - [`playlist`] — ordered playback of media files.
+//! - [`cue`] — named, saved shows built from a queue plus its settings.
 //! - [`scheduler`] — time- and event-based playback scheduling.
 //! - [`renderer`] — fullscreen/borderless output on the selected display.
 
 pub mod audio;
+pub mod cue;
 pub mod display;
 pub mod logging;
 pub mod media;
@@ -25,7 +27,8 @@ use std::path::Path;
 use std::time::Duration;
 
 use display::model::{DisplayInfo, DisplayMode, DisplayModes};
-use media::{MediaItem, MediaKind, ObjectFit};
+use media::{MediaItem, MediaKind, ObjectFit, PlaylistEntry};
+use playlist::RepeatMode;
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Manager};
 
@@ -123,20 +126,6 @@ fn list_directory(directory: String) -> Result<Vec<DirectoryEntry>, String> {
     } else {
         Err(format!("Not a directory: {directory}"))
     }
-}
-
-/// One queued item as supplied by the UI: a path, its fit mode, and the
-/// display it should play on (empty to follow the master display).
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct PlaylistEntry {
-    path: String,
-    #[serde(default)]
-    fit: ObjectFit,
-    #[serde(default)]
-    display: String,
-    #[serde(default)]
-    audio_device: String,
 }
 
 /// Replaces the playback queue from a list of file paths. Files that do not
@@ -450,6 +439,40 @@ fn scheduler_set_preferred_audio_device(state: tauri::State<'_, scheduler::State
     state.set_preferred_audio_device(device);
 }
 
+/// Sets whether the queue stops at its last entry (`off`) or wraps around
+/// (`all`). `one` pins the cursor, which only the queue cursor uses.
+#[tauri::command]
+fn scheduler_set_repeat(state: tauri::State<'_, scheduler::State>, repeat: RepeatMode) {
+    let _ = state.send(scheduler::Command::SetRepeat(repeat));
+}
+
+/// Lists the saved cues in the order they were created.
+#[tauri::command]
+fn cues_list() -> Vec<cue::Cue> {
+    cue::load()
+}
+
+/// Creates a cue, or replaces the stored one with the same id. Returns the id
+/// the cue ended up under.
+#[tauri::command]
+fn cues_save(cue: cue::Cue) -> Result<String, String> {
+    let mut cues = cue::load();
+    let id = cue::upsert(&mut cues, cue)?;
+    cue::save(&cues)?;
+    Ok(id)
+}
+
+/// Deletes a cue, reporting whether one was there to delete.
+#[tauri::command]
+fn cues_delete(id: String) -> Result<bool, String> {
+    let mut cues = cue::load();
+    let removed = cue::remove(&mut cues, &id);
+    if removed {
+        cue::save(&cues)?;
+    }
+    Ok(removed)
+}
+
 /// Returns the current playback status for the control UI.
 #[tauri::command]
 fn scheduler_status(state: tauri::State<'_, scheduler::State>) -> scheduler::Snapshot {
@@ -593,6 +616,10 @@ pub fn run() {
             scheduler_set_fit,
             scheduler_set_audio_device,
             scheduler_set_preferred_audio_device,
+            scheduler_set_repeat,
+            cues_list,
+            cues_save,
+            cues_delete,
             scheduler_status,
             list_audio_devices,
             renderer_render_token,
@@ -690,6 +717,16 @@ mod tests {
     }
 
     #[test]
+    fn a_queue_saved_before_ticking_existed_comes_back_ticked() {
+        let legacy: PlaylistEntry = serde_json::from_str(r#"{"path":"a.jpg"}"#).unwrap();
+        assert!(legacy.selected);
+
+        let unticked: PlaylistEntry =
+            serde_json::from_str(r#"{"path":"a.jpg","selected":false}"#).unwrap();
+        assert!(!unticked.selected);
+    }
+
+    #[test]
     fn session_state_uses_the_camel_case_field_names_the_ui_sends() {
         let from_ui = r#"{
             "entries": [{"path":"a.jpg","fit":"contain","display":"","audioDevice":"dev"}],
@@ -720,6 +757,7 @@ mod tests {
                 fit: ObjectFit::Cover,
                 display: String::new(),
                 audio_device: String::new(),
+                selected: true,
             }],
             dwell_millis: 4000,
             overlay: "caption".into(),

@@ -74,6 +74,45 @@ impl MediaItem {
     }
 }
 
+/// One queued item as supplied by the UI: a path, its fit mode, the display it
+/// should play on (empty to follow the master display), and the output device
+/// its audio should go to (empty to follow the preferred output).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaylistEntry {
+    pub path: String,
+    #[serde(default)]
+    pub fit: ObjectFit,
+    #[serde(default)]
+    pub display: String,
+    #[serde(default)]
+    pub audio_device: String,
+    /// False hides the item from “Play ticked” and from saved cues. Older
+    /// saved queues have no such field, which reads as ticked.
+    #[serde(default = "ticked_by_default")]
+    pub selected: bool,
+}
+
+/// Hand-written so that a default entry is ticked, matching the serde default:
+/// a queue saved before ticking existed should keep playing in full rather than
+/// coming back empty.
+impl Default for PlaylistEntry {
+    fn default() -> Self {
+        Self {
+            path: String::new(),
+            fit: ObjectFit::default(),
+            display: String::new(),
+            audio_device: String::new(),
+            selected: ticked_by_default(),
+        }
+    }
+}
+
+/// Serde default for [`PlaylistEntry::selected`].
+fn ticked_by_default() -> bool {
+    true
+}
+
 /// File extensions treated as images.
 pub const IMAGE_EXTS: &[&str] = &["jpg", "jpeg", "png", "gif", "webp", "bmp", "svg", "ico"];
 

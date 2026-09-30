@@ -77,6 +77,8 @@ pub enum Command {
     SetPreferredAudioDevice {
         device: String,
     },
+    /// How the queue behaves once it reaches its last entry.
+    SetRepeat(RepeatMode),
     /// Pause advancing / video playback.
     Pause,
     /// Resume advancing / video playback.
@@ -311,7 +313,9 @@ impl Kernel {
         });
 
         let mut playlist = Playlist::new();
-        playlist.set_repeat(RepeatMode::All);
+        // The UI owns the choice (once or loop) and sends it before playing;
+        // until then the queue is played through exactly once.
+        playlist.set_repeat(RepeatMode::default());
         let mut session: Option<Session> = None;
         let mut single: Option<Single> = None;
         let mut playing = false;
@@ -375,6 +379,9 @@ impl Kernel {
                     }
                     Command::SetPreferredAudioDevice { device } => {
                         self.state.set_preferred_audio_device(device);
+                    }
+                    Command::SetRepeat(repeat) => {
+                        playlist.set_repeat(repeat);
                     }
                     Command::Stop => {
                         self.stop(&mut session, &mut playing, &mut paused, &mut single)

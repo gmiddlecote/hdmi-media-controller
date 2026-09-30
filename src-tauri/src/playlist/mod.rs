@@ -7,10 +7,13 @@
 //! The playlist is deliberately kept free of scheduling concerns so it can
 //! be driven by the [`crate::scheduler`] kernel or unit-tested in isolation.
 
+use serde::{Deserialize, Serialize};
+
 use crate::media::{MediaItem, ObjectFit};
 
 /// How a playlist behaves once it reaches its last entry.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum RepeatMode {
     /// Stop advancing when the playlist is exhausted.
     #[default]
