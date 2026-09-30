@@ -313,9 +313,9 @@ impl Kernel {
         });
 
         let mut playlist = Playlist::new();
-        // The UI owns the choice (once or loop) and sends it before playing;
-        // until then the queue is played through exactly once.
-        playlist.set_repeat(RepeatMode::default());
+        // Loop by default, as before; a UI that wants once-over playback sends
+        // SetRepeat before playing.
+        playlist.set_repeat(RepeatMode::All);
         let mut session: Option<Session> = None;
         let mut single: Option<Single> = None;
         let mut playing = false;
@@ -506,18 +506,12 @@ impl Kernel {
                     } else if media_ended || dwell_due {
                         match single.as_ref() {
                             Some(active_single) if active_single.mode != PlayMode::Once => {
-                                // Loop / Timed: restart the item to fill the slot.
-                                let display = self.display_for(&session);
-                                let item = playback_item(
-                                    active_single.path.clone(),
-                                    active_single.fit,
-                                    &active_single.audio_device,
-                                );
-                                let opened =
-                                    self.start_item(&item, &display, &mut session, &mut seq);
-                                if !opened {
-                                    playing = false;
-                                    self.stop(&mut session, &mut playing, &mut paused, &mut single);
+                                // Loop / Timed: rewind what is already on screen rather
+                                // than closing and reopening the window, which would
+                                // leave a visible gap between passes.
+                                self.restart_session(active);
+                                if let Some(current) = session.as_mut() {
+                                    current.since = Instant::now();
                                 }
                             }
                             Some(_) => {
@@ -738,6 +732,13 @@ impl Kernel {
     /// Tells an output window to pause (`true`) or resume (`false`) media.
     fn send_control(&self, label: &str, paused: bool) {
         let _ = self.app.emit_to(label, "output-control", paused);
+    }
+
+    /// Rewinds the media in the window that is already on screen and plays it
+    /// again. Reusing the window (and its buffered video) is what keeps a loop
+    /// gapless; opening a new one costs a teardown plus a re-buffer.
+    fn restart_session(&self, session: &Session) {
+        let _ = self.app.emit_to(&session.label, "output-restart", ());
     }
 
     /// Stores the latest error so the UI can surface it.

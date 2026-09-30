@@ -345,15 +345,27 @@
           applyFit(evt.payload);
         });
 
-        event.listen("output-control", function (evt) {
-          const media = stage.querySelector("video, audio");
-          if (!media) return;
-          if (evt.payload === true) {
-            media.pause();
-          } else {
-            media.play().catch(function () {});
-          }
-        });
+            event.listen("output-control", function (evt) {
+              const media = stage.querySelector("video, audio");
+              if (!media) return;
+              if (evt.payload === true) {
+                media.pause();
+              } else {
+                media.play().catch(function () {});
+              }
+            });
+
+            // Loop restart. Seeking to the start of an already-buffered element
+            // and playing avoids the window teardown a reopen would cost, so the
+            // next pass begins straight away.
+            event.listen("output-restart", function () {
+              const media = stage.querySelector("video, audio");
+              if (!media) return;
+              if (Number.isFinite(media.duration) && media.duration > 0) {
+                media.currentTime = 0;
+              }
+              media.play().catch(function () {});
+            });
       })();
     </script>
   </body>
