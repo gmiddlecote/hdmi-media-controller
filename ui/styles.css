@@ -380,7 +380,33 @@ button:focus-visible {
   font-size: 12px;
 }
 
-/* ---------- 7. Display selection ---------- */
+/* ---------- 7. Master display + display selection ---------- */
+
+.master-box {
+  margin-bottom: 14px;
+  padding: 12px 14px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.master-title {
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.master-box select {
+  width: 100%;
+  border-color: rgba(62, 200, 232, 0.4);
+}
+
+.master-hint {
+  margin: 8px 0 0;
+  color: var(--text-3);
+  font-size: 11.5px;
+}
 
 .display-list {
   display: grid;
@@ -543,10 +569,18 @@ button:focus-visible {
   padding: 0;
   overflow-y: auto;
   list-style: none;
+  scrollbar-width: none;
+}
+
+/* The queue scrolls with the wheel but shows no scrollbar. */
+.queue::-webkit-scrollbar {
+  width: 0;
+  height: 0;
 }
 
 .queued-item {
   display: flex;
+  flex: 0 0 auto;
   gap: 10px;
   padding: 8px;
   background: var(--surface-2);
@@ -796,7 +830,7 @@ button:focus-visible {
   font-variant-numeric: tabular-nums;
 }
 
-.preview-btn {
+.preview-open {
   flex-shrink: 0;
   white-space: nowrap;
 }
@@ -808,13 +842,7 @@ button:focus-visible {
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
-}
-
-.playback-row .mode-select {
-  flex: 1 1 300px;
-  min-width: 240px;
-  max-width: 480px;
-  border-color: rgba(62, 200, 232, 0.4);
+  margin-bottom: 14px;
 }
 
 .dwell,

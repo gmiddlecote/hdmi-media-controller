@@ -367,7 +367,6 @@ const resumeBtn = document.getElementById("resume-btn");
 const prevBtn = document.getElementById("prev-btn");
 const nextBtn = document.getElementById("next-btn");
 const stopBtn = document.getElementById("stop-btn");
-const previewBtn = document.getElementById("preview-btn");
 const playbackStatus = document.getElementById("playback-status");
 
 let queuedPaths = [];
@@ -502,6 +501,16 @@ const thumbnailCache = new Map();
 // green highlight on the button that started it.
 let activePlayMode = null;
 
+// The backend canonicalizes every path it is given (`Path::canonicalize`),
+// which on Windows yields the verbatim `\\?\` form, so a queued path and the
+// snapshot path for the same file never compare equal as plain strings.
+function samePath(a, b) {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  const normalize = (value) => value.replace(/^\\\\\?\\/, "").toLowerCase();
+  return normalize(a) === normalize(b);
+}
+
 function updatePlayModeHighlight() {
   queueEl.querySelectorAll(".action[data-mode]").forEach((button) => {
     const row = button.closest(".queued-item");
@@ -510,7 +519,7 @@ function updatePlayModeHighlight() {
     const on =
       !!activePlayMode &&
       !!queued &&
-      queued.path === activePlayMode.path &&
+      samePath(queued.path, activePlayMode.path) &&
       button.dataset.mode === activePlayMode.mode;
     button.classList.toggle("mode-active", on);
     button.setAttribute("aria-pressed", on ? "true" : "false");
@@ -524,6 +533,24 @@ async function playQueuedWithHighlight(path, mode, seconds) {
     updatePlayModeHighlight();
   }
   return ok;
+}
+
+const QUEUE_VISIBLE_ROWS = 4;
+
+/* The queue has no visible scrollbar, so size it to show a whole number of
+   rows. Measuring the tallest visible row keeps 4 in view even when the
+   action row wraps onto a second line. */
+function sizeQueueToRows() {
+  const rows = [...queueEl.children].slice(0, QUEUE_VISIBLE_ROWS);
+  if (rows.length === 0) {
+    queueEl.style.maxHeight = "";
+    return;
+  }
+  const gap = parseFloat(getComputedStyle(queueEl).rowGap) || 0;
+  const tallest = Math.max(...rows.map((row) => row.offsetHeight));
+  queueEl.style.maxHeight = `${
+    QUEUE_VISIBLE_ROWS * tallest + (QUEUE_VISIBLE_ROWS - 1) * gap
+  }px`;
 }
 
 function renderQueue() {
@@ -653,7 +680,7 @@ function renderQueue() {
     remove.title = "Remove from playlist";
     remove.disabled = index === activeIndex;
     remove.addEventListener("click", () => {
-      if (activePlayMode && activePlayMode.path === path) activePlayMode = null;
+      if (activePlayMode && samePath(activePlayMode.path, path)) activePlayMode = null;
       queuedPaths.splice(index, 1);
       renderQueue();
       pushPlaylist();
@@ -697,6 +724,16 @@ function renderQueue() {
         } else {
           invoke("scheduler_stop", {}).catch(() => {});
         }
+      });
+    }
+
+    const openPreviewBtn =
+      mediaKind(path) === "video" ? el("button", "action preview-open", "Open preview") : null;
+    if (openPreviewBtn) {
+      openPreviewBtn.title = "Open this video in a separate preview window";
+      openPreviewBtn.addEventListener("click", (event) => {
+        event.stopPropagation();
+        openPreview(path);
       });
     }
 
@@ -753,6 +790,7 @@ function renderQueue() {
     actions.append(playGroup, fit, monitor, up, down);
     if (audioOutput) actions.append(audioOutput);
     if (preview) actions.append(preview);
+    if (openPreviewBtn) actions.append(openPreviewBtn);
     actions.append(remove);
     body.append(actions);
     const mediaCol = el("div", "queued-media-col");
@@ -760,6 +798,7 @@ function renderQueue() {
     item.append(mediaCol, body);
     queueEl.append(item);
   });
+  sizeQueueToRows();
   updatePlayModeHighlight();
   dropzoneHint.textContent =
     queuedPaths.length === 0
@@ -890,7 +929,7 @@ function updateSnapshot(snapshot) {
   activeIndex = snapshot.playing ? snapshot.index : -1;
   if (
     activePlayMode &&
-    (!snapshot.playing || snapshot.path !== activePlayMode.path)
+    (!snapshot.playing || !samePath(snapshot.path, activePlayMode.path))
   ) {
     activePlayMode = null;
   }
@@ -903,8 +942,6 @@ function updateSnapshot(snapshot) {
 
   playBtn.disabled = snapshot.playing || !snapshot.total;
   stopBtn.disabled = !snapshot.playing;
-  previewBtn.disabled =
-    !snapshot.playing || !snapshot.path || mediaKind(snapshot.path) !== "video";
   pauseBtn.disabled = !snapshot.playing || snapshot.paused;
   resumeBtn.disabled = !snapshot.playing || !snapshot.paused;
 
@@ -1069,9 +1106,6 @@ volumeInput.addEventListener("input", () => {
     }
   });
 
-  previewBtn.addEventListener("click", () => {
-    if (lastSnapshot && lastSnapshot.path) openPreview(lastSnapshot.path);
-  });
   pauseBtn.addEventListener("click", () => invoke("scheduler_pause").catch(() => {}));
   resumeBtn.addEventListener("click", () => invoke("scheduler_resume").catch(() => {}));
   prevBtn.addEventListener("click", () => invoke("scheduler_prev").catch(() => {}));
