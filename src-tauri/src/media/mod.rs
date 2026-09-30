@@ -308,36 +308,65 @@ struct MediaBody {
     range: Option<(u64, u64)>,
 }
 
+/// Largest byte window served for a single `media://` request.
+///
+/// The webview opens a video with an open-ended `Range: bytes=0-`, so
+/// honouring the requested end literally would pull a multi-gigabyte file into
+/// memory before playback could start. Answering with a bounded `206` instead
+/// keeps start-up immediate and memory flat; the player then asks for the
+/// windows it actually needs.
+const MAX_CHUNK_BYTES: u64 = 8 * 1024 * 1024;
+
 /// Reads what a request needs: the requested byte window when the client
 /// sent a usable `Range`, otherwise the whole file.
-fn read_media(path: &Path, range: Option<(usize, usize)>) -> std::io::Result<MediaBody> {
+fn read_media(path: &Path, range: Option<ByteRange>) -> std::io::Result<MediaBody> {
     use std::io::{Read, Seek, SeekFrom};
 
     let mut file = std::fs::File::open(path)?;
     let total = file.metadata()?.len();
-    match range {
-        Some((start, end)) if (start as u64) < total => {
-            let start = start as u64;
-            let end = (end as u64).min(total - 1);
-            file.seek(SeekFrom::Start(start))?;
-            let mut bytes = Vec::new();
-            file.take(end - start + 1).read_to_end(&mut bytes)?;
-            Ok(MediaBody {
-                bytes,
-                total,
-                range: Some((start, end)),
-            })
-        }
-        _ => {
-            let mut bytes = Vec::new();
-            file.read_to_end(&mut bytes)?;
-            Ok(MediaBody {
-                bytes,
-                total,
-                range: None,
-            })
-        }
+
+    let Some((start, end)) = range.and_then(|range| window_bounds(range, total)) else {
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes)?;
+        return Ok(MediaBody {
+            bytes,
+            total,
+            range: None,
+        });
+    };
+
+    file.seek(SeekFrom::Start(start))?;
+    let mut bytes = Vec::new();
+    file.take(end - start + 1).read_to_end(&mut bytes)?;
+    Ok(MediaBody {
+        bytes,
+        total,
+        range: Some((start, end)),
+    })
+}
+
+/// Resolves a requested range against the file size, clamped to the last byte
+/// and to [`MAX_CHUNK_BYTES`]. `None` when the range cannot be satisfied, in
+/// which case the caller falls back to the whole file.
+fn window_bounds(range: ByteRange, total: u64) -> Option<(u64, u64)> {
+    if total == 0 {
+        return None;
     }
+    let (start, requested_end) = match range {
+        ByteRange::Window { start, end } => (start, end.unwrap_or(total - 1)),
+        ByteRange::Suffix { len } => {
+            let len = len.min(total);
+            (total - len, total - 1)
+        }
+    };
+    if start >= total {
+        return None;
+    }
+    let end = requested_end
+        .min(total - 1)
+        .min(start.saturating_add(MAX_CHUNK_BYTES - 1))
+        .max(start);
+    Some((start, end))
 }
 
 /// Builds the `200`/`206` response for a body returned by [`read_media`].
@@ -385,20 +414,31 @@ fn media_response(uri: &str, mime: &str, body: MediaBody) -> tauri::http::Respon
     }
 }
 
-/// Parses a `Range` header value into an inclusive byte window.
-fn parse_range(value: &str) -> Option<(usize, usize)> {
+/// A byte window asked for by the webview.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ByteRange {
+    /// `bytes=start-end`, with `end` absent when the range was open ended.
+    Window { start: u64, end: Option<u64> },
+    /// `bytes=-len`, the final `len` bytes of the file.
+    Suffix { len: u64 },
+}
+
+/// Parses a `Range` header value.
+fn parse_range(value: &str) -> Option<ByteRange> {
     let spec = value.strip_prefix("bytes=")?;
     let (start, end) = spec.split_once('-')?;
-    let start = start.parse::<usize>().ok()?;
-    let end = if end.is_empty() {
-        None
-    } else {
-        end.parse::<usize>().ok()
-    };
-    match end {
-        Some(end) => Some((start, end)),
-        None => Some((start, usize::MAX)),
+    if start.is_empty() {
+        let len = end.parse::<u64>().ok()?;
+        return (len > 0).then_some(ByteRange::Suffix { len });
     }
+    let start = start.parse::<u64>().ok()?;
+    if end.is_empty() {
+        return Some(ByteRange::Window { start, end: None });
+    }
+    Some(ByteRange::Window {
+        start,
+        end: Some(end.parse::<u64>().ok()?),
+    })
 }
 
 fn not_found() -> tauri::http::Response<Vec<u8>> {
@@ -590,13 +630,41 @@ mod tests {
 
     #[test]
     fn parses_byte_ranges() {
-        assert_eq!(parse_range("bytes=0-1023"), Some((0, 1023)));
-        assert_eq!(parse_range("bytes=1024-"), Some((1024, usize::MAX)));
-        assert_eq!(parse_range("bytes=5-10"), Some((5, 10)));
-        assert_eq!(parse_range("bytes=0-"), Some((0, usize::MAX)));
-        assert_eq!(parse_range("bytes=-100"), None);
+        assert_eq!(
+            parse_range("bytes=0-1023"),
+            Some(ByteRange::Window {
+                start: 0,
+                end: Some(1023)
+            })
+        );
+        assert_eq!(
+            parse_range("bytes=1024-"),
+            Some(ByteRange::Window {
+                start: 1024,
+                end: None
+            })
+        );
+        assert_eq!(
+            parse_range("bytes=5-10"),
+            Some(ByteRange::Window {
+                start: 5,
+                end: Some(10)
+            })
+        );
+        assert_eq!(
+            parse_range("bytes=0-"),
+            Some(ByteRange::Window {
+                start: 0,
+                end: None
+            })
+        );
+        assert_eq!(
+            parse_range("bytes=-100"),
+            Some(ByteRange::Suffix { len: 100 })
+        );
         assert_eq!(parse_range("items=1-2"), None);
         assert_eq!(parse_range("bytes=abc"), None);
+        assert_eq!(parse_range("bytes=-0"), None);
     }
 
     fn temp_bytes(body: &[u8]) -> PathBuf {
@@ -612,7 +680,14 @@ mod tests {
     #[test]
     fn reads_only_the_requested_byte_window() {
         let path = temp_bytes(b"0123456789");
-        let media = read_media(&path, Some((2, 5))).unwrap();
+        let media = read_media(
+            &path,
+            Some(ByteRange::Window {
+                start: 2,
+                end: Some(5),
+            }),
+        )
+        .unwrap();
         assert_eq!(media.bytes, b"2345");
         assert_eq!(media.total, 10);
         assert_eq!(media.range, Some((2, 5)));
@@ -628,7 +703,14 @@ mod tests {
         assert_eq!(media.range, None);
 
         // A window that starts past the end falls back to the full body.
-        let media = read_media(&path, Some((10, 20))).unwrap();
+        let media = read_media(
+            &path,
+            Some(ByteRange::Window {
+                start: 10,
+                end: Some(20),
+            }),
+        )
+        .unwrap();
         assert_eq!(media.bytes, b"0123456789");
         assert_eq!(media.range, None);
         let _ = std::fs::remove_file(&path);
@@ -637,10 +719,90 @@ mod tests {
     #[test]
     fn clamps_a_window_to_the_end_of_the_file() {
         let path = temp_bytes(b"0123456789");
-        let media = read_media(&path, Some((6, usize::MAX))).unwrap();
+        let media = read_media(
+            &path,
+            Some(ByteRange::Window {
+                start: 6,
+                end: None,
+            }),
+        )
+        .unwrap();
         assert_eq!(media.bytes, b"6789");
         assert_eq!(media.range, Some((6, 9)));
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn serves_a_suffix_range_from_the_end_of_the_file() {
+        let path = temp_bytes(b"0123456789");
+        let media = read_media(&path, Some(ByteRange::Suffix { len: 4 })).unwrap();
+        assert_eq!(media.bytes, b"6789");
+        assert_eq!(media.range, Some((6, 9)));
+
+        // A suffix longer than the file is the whole file.
+        let media = read_media(&path, Some(ByteRange::Suffix { len: 99 })).unwrap();
+        assert_eq!(media.bytes, b"0123456789");
+        assert_eq!(media.range, Some((0, 9)));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn caps_an_open_ended_range_at_one_chunk() {
+        // Chromium opens a video with `bytes=0-`; the whole file must not be
+        // pulled into memory just to answer it.
+        let total = MAX_CHUNK_BYTES + 4096;
+        assert_eq!(
+            window_bounds(
+                ByteRange::Window {
+                    start: 0,
+                    end: None
+                },
+                total
+            ),
+            Some((0, MAX_CHUNK_BYTES - 1))
+        );
+        assert_eq!(
+            window_bounds(
+                ByteRange::Window {
+                    start: MAX_CHUNK_BYTES,
+                    end: None
+                },
+                total
+            ),
+            Some((MAX_CHUNK_BYTES, total - 1))
+        );
+        // An explicit end inside the first chunk is still honoured exactly.
+        assert_eq!(
+            window_bounds(
+                ByteRange::Window {
+                    start: 0,
+                    end: Some(1023)
+                },
+                total
+            ),
+            Some((0, 1023))
+        );
+        // Past the end of the file, and empty files, fall back to the caller.
+        assert_eq!(
+            window_bounds(
+                ByteRange::Window {
+                    start: total,
+                    end: None
+                },
+                total
+            ),
+            None
+        );
+        assert_eq!(
+            window_bounds(
+                ByteRange::Window {
+                    start: 0,
+                    end: None
+                },
+                0
+            ),
+            None
+        );
     }
 
     #[test]
