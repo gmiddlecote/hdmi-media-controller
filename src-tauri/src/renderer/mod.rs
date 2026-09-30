@@ -214,6 +214,28 @@ pub fn open(
     Ok(())
 }
 
+/// Screen rectangle the preview window should open on.
+///
+/// The preview is a fixed-size window, so it is pinned to display 1 (the
+/// monitor driven by `\\.\DISPLAY1`) and falls back to the first enumerated
+/// display. It deliberately does not follow the primary display: the control
+/// window is usually maximised there and would cover the preview.
+fn preview_display_bounds() -> Option<crate::display::model::DisplayBounds> {
+    let displays = crate::display::list_displays().ok()?;
+    displays
+        .iter()
+        .find(|display| {
+            display
+                .device_name
+                .rsplit('\\')
+                .next()
+                .map(|tail| tail.eq_ignore_ascii_case("DISPLAY1"))
+                .unwrap_or(false)
+        })
+        .or_else(|| displays.first())
+        .map(|display| display.bounds)
+}
+
 pub fn open_preview(app: &AppHandle, item: &MediaItem) -> Result<(), RendererError> {
     let media_url = app.state::<Registry>().register(item.clone());
     let payload = PreviewPayload {
@@ -224,7 +246,9 @@ pub fn open_preview(app: &AppHandle, item: &MediaItem) -> Result<(), RendererErr
 
     if let Some(window) = app.get_webview_window(PREVIEW_LABEL) {
         let _ = app.emit_to(PREVIEW_LABEL, "preview-media", payload);
+        let _ = window.set_always_on_top(true);
         let _ = window.show();
+        let _ = window.unminimize();
         let _ = window.set_focus();
         return Ok(());
     }
@@ -238,7 +262,8 @@ pub fn open_preview(app: &AppHandle, item: &MediaItem) -> Result<(), RendererErr
     .resizable(true)
     .min_inner_size(640.0, 360.0)
     .inner_size(960.0, 540.0)
-    .center()
+    .always_on_top(true)
+    .visible(true)
     .additional_browser_args(
         "--autoplay-policy=no-user-gesture-required --disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection",
     )
@@ -249,19 +274,20 @@ pub fn open_preview(app: &AppHandle, item: &MediaItem) -> Result<(), RendererErr
         );
     });
 
-    if let Ok(displays) = crate::display::list_displays() {
-        if let Some(primary) = displays.iter().find(|display| display.is_primary) {
-            let width = 960.0;
-            let height = 540.0;
-            let x = primary.bounds.x as f64 + (primary.bounds.width as f64 - width).max(0.0) / 2.0;
-            let y =
-                primary.bounds.y as f64 + (primary.bounds.height as f64 - height).max(0.0) / 2.0;
-            builder = builder.position(x, y);
-        }
+    if let Some(bounds) = preview_display_bounds() {
+        let width = 960.0;
+        let height = 540.0;
+        let x = bounds.x as f64 + (bounds.width as f64 - width).max(0.0) / 2.0;
+        let y = bounds.y as f64 + (bounds.height as f64 - height).max(0.0) / 2.0;
+        builder = builder.position(x, y);
     }
 
     match builder.build() {
-        Ok(_) => Ok(()),
+        Ok(window) => {
+            let _ = window.show();
+            let _ = window.set_focus();
+            Ok(())
+        }
         Err(err) => {
             app.state::<PreviewState>().clear();
             Err(RendererError::Creation(err.to_string()))
