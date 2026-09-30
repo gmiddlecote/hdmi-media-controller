@@ -3,11 +3,19 @@ use std::io::Write;
 use std::path::PathBuf;
 
 /// Directory the app writes its log and saved state into.
+///
+/// The debug installer built by `dev-build.yml` and the release installer are
+/// separate installations, and they must not clobber each other's playlist, so
+/// debug builds get a directory of their own.
 pub fn data_dir() -> PathBuf {
     let base = std::env::var_os("LOCALAPPDATA")
         .map(PathBuf::from)
         .unwrap_or_else(std::env::temp_dir);
-    base.join("hdmi-media-controller")
+    if cfg!(debug_assertions) {
+        base.join("hdmi-media-controller-dev")
+    } else {
+        base.join("hdmi-media-controller")
+    }
 }
 
 fn log_path() -> PathBuf {
