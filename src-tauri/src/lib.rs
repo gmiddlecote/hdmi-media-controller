@@ -311,11 +311,23 @@ fn session_load() -> Option<SessionState> {
     serde_json::from_slice(&bytes).ok()
 }
 
+/// Stops playback, tears down every auxiliary window and quits.
+///
+/// The scheduler is stopped first so its tick cannot re-create an output
+/// window while the others are being closed.
+fn shutdown(app: &tauri::AppHandle) {
+    if let Some(scheduler) = app.try_state::<scheduler::State>() {
+        let _ = scheduler.send(scheduler::Command::Stop);
+    }
+    renderer::close_preview(app);
+    renderer::close_all(app);
+    app.exit(0);
+}
+
 /// Closes every open output window and quits the application.
 #[tauri::command]
 fn app_exit(app: tauri::AppHandle) {
-    renderer::close_all(&app);
-    app.exit(0);
+    shutdown(&app);
 }
 
 #[tauri::command]
@@ -530,6 +542,17 @@ pub fn run() {
             Ok(())
         })
         .register_asynchronous_uri_scheme_protocol("media", media::serve)
+        .on_window_event(|window, event| {
+            // Closing the control window must take playback with it. The output
+            // windows are `always_on_top` and `skip_taskbar`, so without this
+            // the video would keep playing fullscreen on the external display
+            // with no window left to control or stop it.
+            if window.label() == "main"
+                && matches!(event, tauri::WindowEvent::CloseRequested { .. })
+            {
+                shutdown(window.app_handle());
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             list_displays,
             list_directory,
