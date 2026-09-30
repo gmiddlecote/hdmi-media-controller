@@ -9,6 +9,7 @@
 //! display config); [`platform_other`] provides stubs for non-Windows
 //! platforms so the crate still compiles and runs there for development.
 
+pub mod edid;
 pub mod hotplug;
 pub mod model;
 

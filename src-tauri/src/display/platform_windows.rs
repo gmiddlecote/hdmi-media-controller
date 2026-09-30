@@ -30,6 +30,7 @@ use windows_sys::Win32::Graphics::Gdi::{
     ENUM_CURRENT_SETTINGS,
 };
 
+use super::edid;
 use super::model::{
     output_technology_label, DisplayBounds, DisplayInfo, DisplayMode, DisplayModes, StateFlags,
     DISPLAY_DEVICE_MIRRORING_DRIVER, EDD_GET_DEVICE_INTERFACE_NAME,
@@ -39,6 +40,42 @@ use super::DisplayError;
 /// Encodes a Rust string as a null-terminated UTF-16 buffer for Win32 calls.
 fn to_utf16(value: &str) -> Vec<u16> {
     value.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+/// Reads the raw EDID blob Windows caches for a monitor.
+fn read_edid(device_path: &str) -> Option<Vec<u8>> {
+    use winreg::enums::{HKEY_LOCAL_MACHINE, KEY_READ, REG_BINARY};
+    use winreg::RegKey;
+
+    let key_path = edid::enum_key_path(device_path)?;
+    let path = format!(r"SYSTEM\CurrentControlSet\Enum\{key_path}\Device Parameters");
+    let params = RegKey::predef(HKEY_LOCAL_MACHINE)
+        .open_subkey_with_flags(path, KEY_READ)
+        .ok()?;
+    match params.get_raw_value(edid::EDID_VALUE) {
+        Ok(value) if value.vtype == REG_BINARY => Some(value.bytes),
+        _ => None,
+    }
+}
+
+/// Best available label for a monitor.
+///
+/// `EnumDisplayDevicesW` reports "Generic PnP Monitor" for laptop panels, so
+/// the EDID model name is preferred, then the PnP manufacturer/product code,
+/// and only then the Win32 device string when it actually says something.
+fn monitor_label(device_path: &str, device_string: &str) -> String {
+    if let Some(edid) = read_edid(device_path) {
+        if let Some(name) = edid::monitor_name(&edid) {
+            return name;
+        }
+    }
+    if let Some(label) = edid::hardware_id(device_path).and_then(edid::hardware_label) {
+        return label;
+    }
+    if edid::is_generic_label(device_string) {
+        return "Unknown display".into();
+    }
+    device_string.to_string()
 }
 
 /// Collects monitor information for a given display adapter.
@@ -68,10 +105,12 @@ fn collect_monitors_for_adapter(
             let device_path = wide_to_string(&monitor.DeviceID);
             let connection_kind = connections.get(&device_path).cloned();
             let bounds = display_bounds(&adapter.DeviceName).unwrap_or_default();
+            let device_string = wide_to_string(&monitor.DeviceString);
+            let friendly_name = monitor_label(&device_path, &device_string);
             displays.push(DisplayInfo::from_device(
                 device_path,
                 adapter_name.clone(),
-                wide_to_string(&monitor.DeviceString),
+                friendly_name,
                 flags,
                 connection_kind,
                 bounds,
