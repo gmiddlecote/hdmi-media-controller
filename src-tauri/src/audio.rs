@@ -5,9 +5,10 @@
 //! device works by making it the *system default* playback endpoint through
 //! the undocumented `IPolicyConfig::SetDefaultEndpoint` interface — every
 //! output window plays through whatever endpoint is the default, so picking a
-//! device here is all the app needs to route its audio. The choice persists
-//! system-wide until changed, exactly like picking a speaker in the Windows
-//! sound settings.
+//! device here is all the app needs to route its audio. That makes the change
+//! system-wide, exactly like picking a speaker in the Windows sound settings,
+//! so [`Routing`] puts the user's own device back as soon as the app stops
+//! holding it.
 
 use serde::Serialize;
 
@@ -17,8 +18,12 @@ use serde::Serialize;
 pub struct AudioDevice {
     /// Endpoint identifier, e.g. `{0.0.0.00000000}.{guid}`.
     pub id: String,
-    /// Friendly name shown by Windows audio settings.
+    /// Friendly name shown by Windows audio settings, e.g. `Speakers`.
     pub name: String,
+    /// Hardware or driver behind the endpoint, e.g. `Realtek(R) Audio`. The UI
+    /// shows it alongside the name so virtual buses are told apart from real
+    /// jacks, which Windows names generically.
+    pub description: String,
 }
 
 /// Lists active playback devices, sorted by name. Empty off Windows.
@@ -46,6 +51,52 @@ pub fn set_default_device(_id: &str) -> Result<(), String> {
     Err("Audio device selection is only supported on Windows.".into())
 }
 
+/// Tracks the system default endpoint so the app can put it back.
+///
+/// The app cannot read the current default (the offline dependency set has no
+/// WASAPI bindings), so this remembers only what the app has itself changed.
+/// `home` is the device the user nominated as their normal output; it is
+/// replayed whenever an item has no device of its own, and on stop and exit.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Routing {
+    /// Device this app last made default; empty when it has set none.
+    applied: String,
+}
+
+impl Routing {
+    /// Device to make default now that `want` is playing, or `None` to leave
+    /// the endpoint alone. `home` is the nominated restore target.
+    pub fn apply(&mut self, want: &str, home: &str) -> Option<String> {
+        if want.is_empty() {
+            return self.restore(home);
+        }
+        if !home.is_empty() && want == home {
+            // Already what we would restore, so there is nothing to do now and
+            // nothing to undo later.
+            self.applied.clear();
+            return None;
+        }
+        if self.applied == want {
+            // Already the default; setting it again would click audibly.
+            return None;
+        }
+        self.applied = want.to_string();
+        Some(want.to_string())
+    }
+
+    /// Device to put back so the system is left the way the user had it.
+    pub fn restore(&mut self, home: &str) -> Option<String> {
+        if self.applied.is_empty() {
+            return None;
+        }
+        self.applied.clear();
+        if home.is_empty() {
+            return None;
+        }
+        Some(home.to_string())
+    }
+}
+
 #[cfg(windows)]
 mod imp {
     use super::AudioDevice;
@@ -60,6 +111,9 @@ mod imp {
     const RENDER_ROOT: &str = r"SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Render";
     /// REG_SZ value holding the endpoint's friendly name.
     const FRIENDLY_NAME_VALUE: &str = r"{a45c254e-df1c-4efd-8020-67d146a850e0},2";
+    /// REG_SZ value holding the device behind the endpoint, e.g. the chipset
+    /// for an onboard jack or the driver for a virtual bus.
+    const DESCRIPTION_VALUE: &str = r"{b3f8fa53-0004-438e-9003-51a46e139bfc},6";
     /// DEVICE_STATE_ACTIVE = 1; disabled/unplugged endpoints are skipped.
     const DEVICE_STATE_ACTIVE: u32 = 1;
 
@@ -102,13 +156,28 @@ mod imp {
             if key.get_value::<u32, _>("DeviceState").unwrap_or(0) != DEVICE_STATE_ACTIVE {
                 continue;
             }
-            let name = key
-                .open_subkey("Properties")
-                .ok()
-                .and_then(|props| props.get_value::<String, _>(FRIENDLY_NAME_VALUE).ok())
-                .unwrap_or_else(|| "Unknown audio device".to_string());
+            let props = key.open_subkey("Properties").ok();
+            let read = |value: &str| -> String {
+                props
+                    .as_ref()
+                    .and_then(|props| props.get_value::<String, _>(value).ok())
+                    .unwrap_or_default()
+            };
+            let name = {
+                let name = read(FRIENDLY_NAME_VALUE);
+                if name.is_empty() {
+                    "Unknown audio device".to_string()
+                } else {
+                    name
+                }
+            };
+            let description = read(DESCRIPTION_VALUE);
             let id = format!("{{0.0.0.00000000}}.{{{}}}", guid.to_lowercase());
-            devices.push(AudioDevice { id, name });
+            devices.push(AudioDevice {
+                id,
+                name,
+                description,
+            });
         }
         devices.sort_by_key(|a| a.name.to_lowercase());
         devices
@@ -161,5 +230,106 @@ mod imp {
         } else {
             Ok(())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AudioDevice, Routing};
+
+    #[test]
+    fn device_fields_reach_the_ui_under_camel_case() {
+        let json = serde_json::to_string(&AudioDevice {
+            id: "{0.0.0.00000000}.{abc}".into(),
+            name: "Speakers".into(),
+            description: "Realtek(R) Audio".into(),
+        })
+        .unwrap();
+        assert!(
+            json.contains(r#""description":"Realtek(R) Audio""#),
+            "{json}"
+        );
+        assert!(json.contains(r#""name":"Speakers""#), "{json}");
+    }
+
+    #[test]
+    fn applies_the_items_device() {
+        let mut routing = Routing::default();
+        assert_eq!(routing.apply("tv", "laptop"), Some("tv".into()));
+    }
+
+    #[test]
+    fn does_not_reapply_the_same_device() {
+        let mut routing = Routing::default();
+        routing.apply("tv", "laptop");
+        assert_eq!(routing.apply("tv", "laptop"), None);
+    }
+
+    #[test]
+    fn restore_puts_the_nominated_device_back() {
+        let mut routing = Routing::default();
+        routing.apply("tv", "laptop");
+        assert_eq!(routing.restore("laptop"), Some("laptop".into()));
+    }
+
+    #[test]
+    fn restore_is_a_no_op_when_nothing_was_applied() {
+        let mut routing = Routing::default();
+        assert_eq!(routing.restore("laptop"), None);
+    }
+
+    #[test]
+    fn restore_only_needs_to_act_once() {
+        let mut routing = Routing::default();
+        routing.apply("tv", "laptop");
+        assert_eq!(routing.restore("laptop"), Some("laptop".into()));
+        assert_eq!(routing.restore("laptop"), None);
+    }
+
+    #[test]
+    fn an_item_without_a_choice_restores() {
+        let mut routing = Routing::default();
+        routing.apply("tv", "laptop");
+        assert_eq!(routing.apply("", "laptop"), Some("laptop".into()));
+    }
+
+    #[test]
+    fn choosing_the_home_device_needs_no_restore() {
+        let mut routing = Routing::default();
+        assert_eq!(routing.apply("laptop", "laptop"), None);
+        assert_eq!(routing.restore("laptop"), None);
+    }
+
+    #[test]
+    fn applying_the_home_device_cancels_an_earlier_choice() {
+        let mut routing = Routing::default();
+        routing.apply("tv", "laptop");
+        assert_eq!(routing.apply("laptop", "laptop"), None);
+        assert_eq!(routing.restore("laptop"), None);
+    }
+
+    #[test]
+    fn without_a_home_device_nothing_is_restored() {
+        let mut routing = Routing::default();
+        routing.apply("tv", "");
+        assert_eq!(routing.restore(""), None);
+    }
+
+    #[test]
+    fn a_forgotten_home_device_does_not_pin_the_previous_choice() {
+        let mut routing = Routing::default();
+        routing.apply("tv", "laptop");
+        routing.apply("", "");
+        // The app is no longer holding the endpoint, so nominating a device
+        // later must not make it think it still owes a restore.
+        assert_eq!(routing.restore("laptop"), None);
+    }
+
+    #[test]
+    fn switching_devices_routes_to_the_new_one() {
+        let mut routing = Routing::default();
+        routing.apply("tv", "laptop");
+        assert_eq!(routing.apply("receiver", "laptop"), Some("receiver".into()));
+        assert_eq!(routing.restore("laptop"), Some("laptop".into()));
     }
 }

@@ -368,6 +368,7 @@ const prevBtn = document.getElementById("prev-btn");
 const nextBtn = document.getElementById("next-btn");
 const stopBtn = document.getElementById("stop-btn");
 const playbackStatus = document.getElementById("playback-status");
+const preferredAudio = document.getElementById("preferred-audio");
 
 let queuedPaths = [];
 let displays = [];
@@ -377,20 +378,75 @@ let displays = [];
 let pendingDisplay = "";
 
 let audioDevices = [];
+// Device to restore as the system default; "" means the app never changes it.
+let preferredAudioDevice = "";
+
+// Windows names a laptop's analog jack just "Speakers", so the driver behind
+// the endpoint is shown too: that is what tells a real jack apart from a
+// Voicemeeter or VB-CABLE bus.
+function audioLabel(device) {
+  return device.description && device.description !== device.name
+    ? `${device.name} — ${device.description}`
+    : device.name;
+}
+
+function syncPreferredAudio() {
+  if (!preferredAudio) return;
+  preferredAudio.replaceChildren();
+  const leaveAlone = el("option", "", "Don't change the system default");
+  leaveAlone.value = "";
+  preferredAudio.append(leaveAlone);
+  audioDevices.forEach((device) => {
+    const option = el("option", "", audioLabel(device));
+    option.value = device.id;
+    preferredAudio.append(option);
+  });
+  if (
+    preferredAudioDevice &&
+    !audioDevices.some((device) => device.id === preferredAudioDevice)
+  ) {
+    preferredAudioDevice = "";
+  }
+  preferredAudio.value = preferredAudioDevice;
+  preferredAudio.disabled = audioDevices.length === 0;
+}
 
 function loadAudioDevices() {
   invoke("list_audio_devices")
     .then((devices) => {
       audioDevices = devices;
+      syncPreferredAudio();
       renderQueue();
     })
     .catch(() => {
       audioDevices = [];
+      syncPreferredAudio();
       renderQueue();
     });
 }
 
 loadAudioDevices();
+
+preferredAudio.addEventListener("change", async () => {
+  const previous = preferredAudioDevice;
+  preferredAudioDevice = preferredAudio.value;
+  try {
+    await invoke("scheduler_set_preferred_audio_device", {
+      device: preferredAudioDevice,
+    });
+    const selected = audioDevices.find(
+      (device) => device.id === preferredAudioDevice
+    );
+    playbackStatus.textContent = selected
+      ? `Preferred output set to ${audioLabel(selected)}. The app puts it back when it stops changing the audio device.`
+      : "The app will leave the system audio device alone.";
+    scheduleSessionSave();
+  } catch (error) {
+    preferredAudioDevice = previous;
+    preferredAudio.value = previous;
+    playbackStatus.textContent = `Could not set the preferred output: ${String(error)}`;
+  }
+});
 
 function queueEntry(path) {
   return {
@@ -738,7 +794,8 @@ function renderQueue() {
     }
 
     let audioOutput = null;
-    if (mediaKind(path) === "audio") {
+    const rowKind = mediaKind(path);
+    if (rowKind === "audio" || rowKind === "video") {
       if (
         queued.audioDevice &&
         !audioDevices.some((device) => device.id === queued.audioDevice)
@@ -746,14 +803,15 @@ function renderQueue() {
         queued.audioDevice = "";
       }
       audioOutput = el("select", "audio-item-select");
-      audioOutput.title = "Audio output for this item";
+      audioOutput.title =
+        "Output device for this item. While it plays the app makes this the system default, then puts your Preferred output back.";
       audioOutput.setAttribute("aria-label", `Audio output for ${name}`);
       audioOutput.addEventListener("click", (event) => event.stopPropagation());
       const systemDefault = el("option", "", "Current system default");
       systemDefault.value = "";
       audioOutput.append(systemDefault);
       audioDevices.forEach((device) => {
-        const option = el("option", "", device.name);
+        const option = el("option", "", audioLabel(device));
         option.value = device.id;
         audioOutput.append(option);
       });
@@ -771,8 +829,8 @@ function renderQueue() {
             (device) => device.id === queued.audioDevice
           );
           playbackStatus.textContent = selected
-            ? `Audio output saved for this item: ${selected.name}.`
-            : "This item will use the current system audio output.";
+            ? `Audio output saved for this item: ${audioLabel(selected)}. It becomes the system default while the item plays.`
+            : "This item will use whatever the system audio output is at the time.";
           scheduleSessionSave();
         } catch (error) {
           queued.audioDevice = previous;
@@ -864,6 +922,7 @@ async function saveSession() {
         dwellMillis: Math.max(1, Number(dwellInput.value) || 5) * 1000,
         overlay: overlayInput.value,
         display: outputDisplay.value || "",
+        preferredAudioDevice,
       },
     });
   } catch (error) {
@@ -906,6 +965,13 @@ async function restoreSession() {
     } else {
       pendingDisplay = session.display;
     }
+  }
+  if (typeof session.preferredAudioDevice === "string") {
+    preferredAudioDevice = session.preferredAudioDevice;
+    syncPreferredAudio();
+    invoke("scheduler_set_preferred_audio_device", {
+      device: preferredAudioDevice,
+    }).catch(() => {});
   }
   renderQueue();
   if (queuedPaths.length > 0) {

@@ -287,6 +287,9 @@ struct SessionState {
     overlay: String,
     #[serde(default)]
     display: String,
+    /// Device to make the system default whenever the app is not holding one.
+    #[serde(default)]
+    preferred_audio_device: String,
 }
 
 fn session_path() -> std::path::PathBuf {
@@ -318,6 +321,9 @@ fn session_load() -> Option<SessionState> {
 fn shutdown(app: &tauri::AppHandle) {
     if let Some(scheduler) = app.try_state::<scheduler::State>() {
         let _ = scheduler.send(scheduler::Command::Stop);
+        // The Stop is queued, so hand the system default back here rather than
+        // racing the tick that may never run again.
+        scheduler.restore_audio();
     }
     renderer::close_preview(app);
     renderer::close_all(app);
@@ -435,6 +441,13 @@ fn scheduler_set_audio_device(
         path: canonical,
         audio_device,
     })
+}
+
+/// Nominates the output device to restore as the system default once the app
+/// stops holding one. Empty means the system default is left alone.
+#[tauri::command]
+fn scheduler_set_preferred_audio_device(state: tauri::State<'_, scheduler::State>, device: String) {
+    state.set_preferred_audio_device(device);
 }
 
 /// Returns the current playback status for the control UI.
@@ -579,6 +592,7 @@ pub fn run() {
             scheduler_set_overlay,
             scheduler_set_fit,
             scheduler_set_audio_device,
+            scheduler_set_preferred_audio_device,
             scheduler_status,
             list_audio_devices,
             renderer_render_token,
@@ -710,6 +724,7 @@ mod tests {
             dwell_millis: 4000,
             overlay: "caption".into(),
             display: "DISPLAY1".into(),
+            preferred_audio_device: "device-a".into(),
         };
         session_save(saved).unwrap();
 
@@ -717,6 +732,7 @@ mod tests {
         assert_eq!(loaded.dwell_millis, 4000);
         assert_eq!(loaded.overlay, "caption");
         assert_eq!(loaded.display, "DISPLAY1");
+        assert_eq!(loaded.preferred_audio_device, "device-a");
         assert_eq!(loaded.entries.len(), 1);
         assert_eq!(loaded.entries[0].path, "clip.mp4");
 

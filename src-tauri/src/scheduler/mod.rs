@@ -29,6 +29,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Listener, Manager};
 
+use crate::audio;
 use crate::media::{MediaItem, MediaKind, ObjectFit};
 use crate::playlist::{Playlist, RepeatMode};
 use crate::renderer;
@@ -71,6 +72,10 @@ pub enum Command {
     SetAudioDevice {
         path: String,
         audio_device: String,
+    },
+    /// Nominate the device to restore as the system default output.
+    SetPreferredAudioDevice {
+        device: String,
     },
     /// Pause advancing / video playback.
     Pause,
@@ -135,6 +140,12 @@ pub struct State {
     snapshot: Arc<Mutex<Snapshot>>,
     dwell: Arc<Mutex<Duration>>,
     overlay: Arc<Mutex<OverlayConfig>>,
+    /// System-default endpoint bookkeeping. Shared with the command layer so
+    /// the app can hand the user's device back as it shuts down.
+    audio: Arc<Mutex<audio::Routing>>,
+    /// Device to make default whenever the app is not holding one; the user's
+    /// nominated normal output.
+    preferred_audio: Arc<Mutex<String>>,
 }
 
 impl State {
@@ -144,6 +155,8 @@ impl State {
             snapshot: Arc::new(Mutex::new(Snapshot::default())),
             dwell: Arc::new(Mutex::new(Duration::from_secs(5))),
             overlay: Arc::new(Mutex::new(OverlayConfig::default())),
+            audio: Arc::new(Mutex::new(audio::Routing::default())),
+            preferred_audio: Arc::new(Mutex::new(String::new())),
         }
     }
 
@@ -171,6 +184,35 @@ impl State {
 
     pub(crate) fn snapshot(&self) -> Snapshot {
         self.snapshot.lock().unwrap().clone()
+    }
+
+    /// Nominates the device to hand the system back when nothing of ours is
+    /// playing. Empty means the app never changes the default on its way out.
+    pub(crate) fn set_preferred_audio_device(&self, device: String) {
+        *self.preferred_audio.lock().unwrap() = device;
+    }
+
+    /// Routes audio for an item that is starting: flips the system default to
+    /// the item's choice, or puts the nominated device back when it has none.
+    pub(crate) fn route_audio(&self, want: &str) {
+        let home = self.preferred_audio.lock().unwrap().clone();
+        let decision = self.audio.lock().unwrap().apply(want, &home);
+        self.set_endpoint(decision);
+    }
+
+    /// Makes the nominated device the system default again.
+    pub(crate) fn restore_audio(&self) {
+        let home = self.preferred_audio.lock().unwrap().clone();
+        let decision = self.audio.lock().unwrap().restore(&home);
+        self.set_endpoint(decision);
+    }
+
+    fn set_endpoint(&self, device: Option<String>) {
+        if let Some(id) = device {
+            if let Err(err) = audio::set_default_device(&id) {
+                self.snapshot.lock().unwrap().last_error = Some(err);
+            }
+        }
     }
 }
 
@@ -331,6 +373,9 @@ impl Kernel {
                             }
                         }
                     }
+                    Command::SetPreferredAudioDevice { device } => {
+                        self.state.set_preferred_audio_device(device);
+                    }
                     Command::Stop => {
                         self.stop(&mut session, &mut playing, &mut paused, &mut single)
                     }
@@ -354,6 +399,7 @@ impl Kernel {
                                 let opened =
                                     self.step_forward(&mut playlist, &mut session, &mut seq);
                                 if !opened {
+                                    self.state.restore_audio();
                                     playing = false;
                                 }
                             }
@@ -474,6 +520,7 @@ impl Kernel {
                                 let opened =
                                     self.step_forward(&mut playlist, &mut session, &mut seq);
                                 if !opened {
+                                    self.state.restore_audio();
                                     playing = false;
                                 }
                             }
@@ -563,15 +610,14 @@ impl Kernel {
         session: &mut Option<Session>,
         seq: &mut u64,
     ) -> bool {
+        // Routing covers every kind: an item with no choice of its own hands the
+        // system back to the nominated device instead of leaving it where the
+        // last video put it.
+        self.state.route_audio(&item.audio_device);
         if item.kind == MediaKind::Audio {
             *seq += 1;
             let label = format!("audio-{seq}");
             let overlay = self.state.overlay();
-            if !item.audio_device.is_empty() {
-                if let Err(err) = crate::audio::set_default_device(&item.audio_device) {
-                    self.set_error(err);
-                }
-            }
             if let Err(err) = renderer::open_audio(&self.app, item, &label, &overlay.text) {
                 self.set_error(err.to_string());
                 return false;
@@ -653,6 +699,7 @@ impl Kernel {
     ) {
         self.pending.borrow_mut().take();
         self.close_session(session);
+        self.state.restore_audio();
         *playing = false;
         *paused = false;
         *single = None;
