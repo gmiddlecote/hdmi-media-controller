@@ -1,21 +1,15 @@
 //! Media sources: local image, video, and audio files.
 //!
 //! A [`MediaItem`] describes one playable file. The module also owns the
-//! `media://` scheme registry backing the renderer: every item that is
-//! being shown (or queued) is registered under a numeric id, and the
-//! `serve` protocol handler streams the file bytes to the output window.
-//!
-//! The registry doubles as an allow-list — the protocol refuses ids that
-//! were never registered, and refuse anything but registered files, so the
-//! renderer cannot be tricked into reading arbitrary paths from the disk.
+//! `media://` scheme registry: every item that is being shown (or queued) is
+//! registered under a numeric id. The registry doubles as an allow-list for
+//! the renderer.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
-
-use crate::logging;
 
 /// Kind of media a source can carry.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -197,11 +191,7 @@ struct RegistryInner {
 }
 
 impl Registry {
-    /// Returns the URL for a file, registering it if needed. WebView2 (the
-    /// Windows webview) does not support real custom URI schemes — Tauri only
-    /// routes requests to a registered handler through `http://<scheme>.localhost`.
-    /// So on Windows the id lives in the *path* of an http URL; on other
-    /// platforms the scheme itself is delivered to the handler.
+    /// Returns the URL for a file, registering it if needed.
     pub fn register(&self, item: MediaItem) -> String {
         let mut inner = self.0.lock().unwrap();
         let id = match inner
@@ -231,24 +221,14 @@ impl Registry {
     }
 }
 
-/// Builds the `media://localhost/<id>` URL (or `http://media.localhost/<id>`
-/// on Windows, where WebView2/Tauri has no real custom scheme support).
+/// Builds the `media://localhost/<id>` URL.
 fn register_url(id: u64) -> String {
-    if cfg!(target_os = "windows") {
-        format!("http://media.localhost/{id}")
-    } else {
-        format!("media://localhost/{id}")
-    }
+    format!("media://localhost/{id}")
 }
 
-/// Parses the numeric id from a `media://` URL (`media://localhost/<id>`,
-/// legacy `media://<id>`) or the Windows `http://media.localhost/<id>` form.
+/// Parses the numeric id from a `media://` URL.
 pub fn id_from_url(url: &str) -> Option<u64> {
-    let rest = url.strip_prefix("media://").or_else(|| {
-        url.strip_prefix("http://")
-            .or_else(|| url.strip_prefix("https://"))?
-            .strip_prefix("media.localhost/")
-    })?;
+    let rest = url.strip_prefix("media://")?;
     let token = rest
         .rsplit('/')
         .map(|part| {
@@ -264,21 +244,6 @@ pub fn id_from_url(url: &str) -> Option<u64> {
     token.parse().ok()
 }
 
-/// Extracts the numeric id from a media request's URI. Tolerates webviews
-/// that deliver the id as a bare path (`media://localhost/N`, `/N`) and the
-/// legacy authority form (`media://N`).
-fn id_from_request(uri: &tauri::http::Uri) -> Option<u64> {
-    id_from_url(&uri.to_string()).or_else(|| {
-        uri.path()
-            .trim_start_matches('/')
-            .rsplit('/')
-            .next()
-            .unwrap_or("")
-            .parse()
-            .ok()
-    })
-}
-
 /// Absolute path of a file, or `None` when it exists but is a directory.
 pub fn canonical_path(path: &Path) -> Option<PathBuf> {
     if !path.is_file() {
@@ -287,208 +252,7 @@ pub fn canonical_path(path: &Path) -> Option<PathBuf> {
     path.canonicalize().ok()
 }
 
-/// Serves registered media files over the `media://` custom URI scheme.
-///
-/// Registered ids are served with their natural `Content-Type`; video
-/// requests honor byte ranges so the renderer can seek. Anything that was
-/// never registered (arbitrary ids) is refused with 404 — the registry is
-/// the allow-list.
-///
-/// Only the registry lookup runs on the caller's thread. WebView2 invokes
-/// this handler synchronously from the app's main thread, so the file itself
-/// is read on a worker thread — a full read of a large video would otherwise
-/// freeze the whole UI. Only the requested byte range is read when the
-/// client asked for one.
-pub fn serve(
-    ctx: tauri::UriSchemeContext<'_, tauri::Wry>,
-    request: tauri::http::Request<Vec<u8>>,
-    responder: tauri::UriSchemeResponder,
-) {
-    use tauri::http::header::RANGE;
-    use tauri::Manager;
-
-    let id = id_from_request(request.uri());
-    let Some(item) = id.and_then(|id| ctx.app_handle().state::<Registry>().get(id)) else {
-        logging::error(&format!("media:// serve 404 for uri {}", request.uri()));
-        responder.respond(not_found());
-        return;
-    };
-
-    // Honor a single `bytes=start-end` or `bytes=start-` range (the webview
-    // uses these while scrubbing video); fall back to serving the whole file.
-    let range = request
-        .headers()
-        .get(RANGE)
-        .and_then(|value| value.to_str().ok())
-        .and_then(parse_range);
-    let uri = request.uri().to_string();
-    let mime = mime_for(item.kind, &item.path);
-
-    std::thread::spawn(move || {
-        let response = match read_media(Path::new(&item.path), range) {
-            Ok(body) => media_response(&uri, &mime, body),
-            Err(_) => {
-                logging::error(&format!(
-                    "media:// serve read failed for {:?} (id {:?})",
-                    item.path, id
-                ));
-                not_found()
-            }
-        };
-        responder.respond(response);
-    });
-}
-
-/// What a `media://` read produced: the body to serve, the file size, and
-/// the byte window actually read (`None` for a whole-file body).
-struct MediaBody {
-    bytes: Vec<u8>,
-    total: u64,
-    range: Option<(u64, u64)>,
-}
-
-/// Largest byte window served for a single `media://` request.
-///
-/// The webview opens a video with an open-ended `Range: bytes=0-`, so
-/// honouring the requested end literally would pull a multi-gigabyte file into
-/// memory before playback could start. Answering with a bounded `206` instead
-/// keeps start-up immediate and memory flat; the player then asks for the
-/// windows it actually needs.
-const MAX_CHUNK_BYTES: u64 = 8 * 1024 * 1024;
-
-/// Reads what a request needs: the requested byte window when the client
-/// sent a usable `Range`, otherwise the whole file.
-fn read_media(path: &Path, range: Option<ByteRange>) -> std::io::Result<MediaBody> {
-    use std::io::{Read, Seek, SeekFrom};
-
-    let mut file = std::fs::File::open(path)?;
-    let total = file.metadata()?.len();
-
-    let Some((start, end)) = range.and_then(|range| window_bounds(range, total)) else {
-        let mut bytes = Vec::new();
-        file.read_to_end(&mut bytes)?;
-        return Ok(MediaBody {
-            bytes,
-            total,
-            range: None,
-        });
-    };
-
-    file.seek(SeekFrom::Start(start))?;
-    let mut bytes = Vec::new();
-    file.take(end - start + 1).read_to_end(&mut bytes)?;
-    Ok(MediaBody {
-        bytes,
-        total,
-        range: Some((start, end)),
-    })
-}
-
-/// Resolves a requested range against the file size, clamped to the last byte
-/// and to [`MAX_CHUNK_BYTES`]. `None` when the range cannot be satisfied, in
-/// which case the caller falls back to the whole file.
-fn window_bounds(range: ByteRange, total: u64) -> Option<(u64, u64)> {
-    if total == 0 {
-        return None;
-    }
-    let (start, requested_end) = match range {
-        ByteRange::Window { start, end } => (start, end.unwrap_or(total - 1)),
-        ByteRange::Suffix { len } => {
-            let len = len.min(total);
-            (total - len, total - 1)
-        }
-    };
-    if start >= total {
-        return None;
-    }
-    let end = requested_end
-        .min(total - 1)
-        .min(start.saturating_add(MAX_CHUNK_BYTES - 1))
-        .max(start);
-    Some((start, end))
-}
-
-/// Builds the `200`/`206` response for a body returned by [`read_media`].
-fn media_response(uri: &str, mime: &str, body: MediaBody) -> tauri::http::Response<Vec<u8>> {
-    use tauri::http::header::{ACCEPT_RANGES, CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE};
-    use tauri::http::{Response, StatusCode};
-
-    let MediaBody {
-        bytes,
-        total,
-        range,
-    } = body;
-    match range {
-        Some((start, end)) => {
-            logging::info(&format!(
-                "media:// serve {} -> 206 {}bytes {}",
-                uri,
-                bytes.len(),
-                mime
-            ));
-            Response::builder()
-                .status(StatusCode::PARTIAL_CONTENT)
-                .header(CONTENT_TYPE, mime)
-                .header(ACCEPT_RANGES, "bytes")
-                .header(CONTENT_LENGTH, bytes.len())
-                .header(CONTENT_RANGE, format!("bytes {start}-{end}/{total}"))
-                .body(bytes)
-                .unwrap_or_else(|_| not_found())
-        }
-        None => {
-            logging::info(&format!(
-                "media:// serve {} -> 200 {}bytes {}",
-                uri,
-                bytes.len(),
-                mime
-            ));
-            Response::builder()
-                .status(StatusCode::OK)
-                .header(CONTENT_TYPE, mime)
-                .header(ACCEPT_RANGES, "bytes")
-                .header(CONTENT_LENGTH, bytes.len())
-                .body(bytes)
-                .unwrap_or_else(|_| not_found())
-        }
-    }
-}
-
-/// A byte window asked for by the webview.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ByteRange {
-    /// `bytes=start-end`, with `end` absent when the range was open ended.
-    Window { start: u64, end: Option<u64> },
-    /// `bytes=-len`, the final `len` bytes of the file.
-    Suffix { len: u64 },
-}
-
-/// Parses a `Range` header value.
-fn parse_range(value: &str) -> Option<ByteRange> {
-    let spec = value.strip_prefix("bytes=")?;
-    let (start, end) = spec.split_once('-')?;
-    if start.is_empty() {
-        let len = end.parse::<u64>().ok()?;
-        return (len > 0).then_some(ByteRange::Suffix { len });
-    }
-    let start = start.parse::<u64>().ok()?;
-    if end.is_empty() {
-        return Some(ByteRange::Window { start, end: None });
-    }
-    Some(ByteRange::Window {
-        start,
-        end: Some(end.parse::<u64>().ok()?),
-    })
-}
-
-fn not_found() -> tauri::http::Response<Vec<u8>> {
-    tauri::http::Response::builder()
-        .status(tauri::http::StatusCode::NOT_FOUND)
-        .body(Vec::new())
-        .unwrap_or_else(|_| tauri::http::Response::default())
-}
-
-/// Diagnostics for a single `media://` URL, shown on the renderer when a
-/// load fails so the cause (id routing, registry, missing file) is visible.
+/// Diagnostics for a `media://` URL.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MediaProbe {
@@ -502,7 +266,7 @@ pub struct MediaProbe {
     pub mime: Option<String>,
 }
 
-/// Collects everything the protocol handler would need to serve `url`.
+/// Collects everything needed to serve `url`.
 pub fn probe(url: &str, registry: &Registry) -> MediaProbe {
     let id = id_from_url(url);
     let item = id.and_then(|id| registry.get(id));
@@ -585,9 +349,7 @@ mod tests {
     fn registers_and_resolves_ids() {
         let registry = Registry::default();
         let url = registry.register(items()[0].clone());
-        assert!(
-            url.starts_with("media://localhost/") || url.starts_with("http://media.localhost/")
-        );
+        assert!(url.starts_with("media://localhost/"));
         let id = id_from_url(&url).expect("id parses");
         assert_eq!(registry.get(id), Some(items()[0].clone()));
 
@@ -596,7 +358,7 @@ mod tests {
     }
 
     #[test]
-    fn parsing_handles_path_authority_and_query_forms() {
+    fn parsing_handles_path_and_query_forms() {
         assert_eq!(id_from_url("media://localhost/0"), Some(0));
         assert_eq!(id_from_url("media://localhost/42"), Some(42));
         assert_eq!(id_from_url("media://7"), Some(7));
@@ -605,21 +367,6 @@ mod tests {
         assert_eq!(id_from_url("media://localhost/"), None);
         assert_eq!(id_from_url("media://"), None);
         assert_eq!(id_from_url("not-media://1"), None);
-        assert_eq!(id_from_url("http://media.localhost/0"), Some(0));
-        assert_eq!(id_from_url("http://media.localhost/3?range=yes"), Some(3));
-        assert_eq!(id_from_url("https://media.localhost/5"), Some(5));
-        assert_eq!(id_from_url("http://media.localhost/"), None);
-        assert_eq!(id_from_url("http://example.com/0"), None);
-
-        // Bare-path requests (some webviews deliver just `/N`).
-        let uri: tauri::http::Uri = "/9".parse().unwrap();
-        assert_eq!(id_from_request(&uri), Some(9));
-        let uri: tauri::http::Uri = "media://localhost/11".parse().unwrap();
-        assert_eq!(id_from_request(&uri), Some(11));
-        let uri: tauri::http::Uri = "media://13".parse().unwrap();
-        assert_eq!(id_from_request(&uri), Some(13));
-        let uri: tauri::http::Uri = "http://media.localhost/17".parse().unwrap();
-        assert_eq!(id_from_request(&uri), Some(17));
     }
 
     #[test]
@@ -665,215 +412,5 @@ mod tests {
         assert!(!missing_info.exists);
 
         let _ = std::fs::remove_file(&dir);
-    }
-
-    #[test]
-    fn parses_byte_ranges() {
-        assert_eq!(
-            parse_range("bytes=0-1023"),
-            Some(ByteRange::Window {
-                start: 0,
-                end: Some(1023)
-            })
-        );
-        assert_eq!(
-            parse_range("bytes=1024-"),
-            Some(ByteRange::Window {
-                start: 1024,
-                end: None
-            })
-        );
-        assert_eq!(
-            parse_range("bytes=5-10"),
-            Some(ByteRange::Window {
-                start: 5,
-                end: Some(10)
-            })
-        );
-        assert_eq!(
-            parse_range("bytes=0-"),
-            Some(ByteRange::Window {
-                start: 0,
-                end: None
-            })
-        );
-        assert_eq!(
-            parse_range("bytes=-100"),
-            Some(ByteRange::Suffix { len: 100 })
-        );
-        assert_eq!(parse_range("items=1-2"), None);
-        assert_eq!(parse_range("bytes=abc"), None);
-        assert_eq!(parse_range("bytes=-0"), None);
-    }
-
-    fn temp_bytes(body: &[u8]) -> PathBuf {
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let path = std::env::temp_dir().join(format!("hmc-media-{}-{nanos}", std::process::id()));
-        std::fs::write(&path, body).unwrap();
-        path
-    }
-
-    #[test]
-    fn reads_only_the_requested_byte_window() {
-        let path = temp_bytes(b"0123456789");
-        let media = read_media(
-            &path,
-            Some(ByteRange::Window {
-                start: 2,
-                end: Some(5),
-            }),
-        )
-        .unwrap();
-        assert_eq!(media.bytes, b"2345");
-        assert_eq!(media.total, 10);
-        assert_eq!(media.range, Some((2, 5)));
-        let _ = std::fs::remove_file(&path);
-    }
-
-    #[test]
-    fn reads_the_whole_file_without_a_usable_range() {
-        let path = temp_bytes(b"0123456789");
-        let media = read_media(&path, None).unwrap();
-        assert_eq!(media.bytes, b"0123456789");
-        assert_eq!(media.total, 10);
-        assert_eq!(media.range, None);
-
-        // A window that starts past the end falls back to the full body.
-        let media = read_media(
-            &path,
-            Some(ByteRange::Window {
-                start: 10,
-                end: Some(20),
-            }),
-        )
-        .unwrap();
-        assert_eq!(media.bytes, b"0123456789");
-        assert_eq!(media.range, None);
-        let _ = std::fs::remove_file(&path);
-    }
-
-    #[test]
-    fn clamps_a_window_to_the_end_of_the_file() {
-        let path = temp_bytes(b"0123456789");
-        let media = read_media(
-            &path,
-            Some(ByteRange::Window {
-                start: 6,
-                end: None,
-            }),
-        )
-        .unwrap();
-        assert_eq!(media.bytes, b"6789");
-        assert_eq!(media.range, Some((6, 9)));
-        let _ = std::fs::remove_file(&path);
-    }
-
-    #[test]
-    fn serves_a_suffix_range_from_the_end_of_the_file() {
-        let path = temp_bytes(b"0123456789");
-        let media = read_media(&path, Some(ByteRange::Suffix { len: 4 })).unwrap();
-        assert_eq!(media.bytes, b"6789");
-        assert_eq!(media.range, Some((6, 9)));
-
-        // A suffix longer than the file is the whole file.
-        let media = read_media(&path, Some(ByteRange::Suffix { len: 99 })).unwrap();
-        assert_eq!(media.bytes, b"0123456789");
-        assert_eq!(media.range, Some((0, 9)));
-        let _ = std::fs::remove_file(&path);
-    }
-
-    #[test]
-    fn caps_an_open_ended_range_at_one_chunk() {
-        // Chromium opens a video with `bytes=0-`; the whole file must not be
-        // pulled into memory just to answer it.
-        let total = MAX_CHUNK_BYTES + 4096;
-        assert_eq!(
-            window_bounds(
-                ByteRange::Window {
-                    start: 0,
-                    end: None
-                },
-                total
-            ),
-            Some((0, MAX_CHUNK_BYTES - 1))
-        );
-        assert_eq!(
-            window_bounds(
-                ByteRange::Window {
-                    start: MAX_CHUNK_BYTES,
-                    end: None
-                },
-                total
-            ),
-            Some((MAX_CHUNK_BYTES, total - 1))
-        );
-        // An explicit end inside the first chunk is still honoured exactly.
-        assert_eq!(
-            window_bounds(
-                ByteRange::Window {
-                    start: 0,
-                    end: Some(1023)
-                },
-                total
-            ),
-            Some((0, 1023))
-        );
-        // Past the end of the file, and empty files, fall back to the caller.
-        assert_eq!(
-            window_bounds(
-                ByteRange::Window {
-                    start: total,
-                    end: None
-                },
-                total
-            ),
-            None
-        );
-        assert_eq!(
-            window_bounds(
-                ByteRange::Window {
-                    start: 0,
-                    end: None
-                },
-                0
-            ),
-            None
-        );
-    }
-
-    #[test]
-    fn media_response_builds_partial_and_full_bodies() {
-        let partial = media_response(
-            "media://localhost/1",
-            "video/mp4",
-            MediaBody {
-                bytes: b"2345".to_vec(),
-                total: 10,
-                range: Some((2, 5)),
-            },
-        );
-        assert_eq!(partial.status(), tauri::http::StatusCode::PARTIAL_CONTENT);
-        assert_eq!(
-            partial
-                .headers()
-                .get("content-range")
-                .and_then(|value| value.to_str().ok()),
-            Some("bytes 2-5/10")
-        );
-
-        let full = media_response(
-            "media://localhost/1",
-            "image/png",
-            MediaBody {
-                bytes: b"0123".to_vec(),
-                total: 4,
-                range: None,
-            },
-        );
-        assert_eq!(full.status(), tauri::http::StatusCode::OK);
-        assert_eq!(full.body().len(), 4);
     }
 }
